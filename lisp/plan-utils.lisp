@@ -10,11 +10,7 @@
   When you first acquire this software please send mail to 
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "UCPOP")
-
-(use-package "VARIABLE")
-
-(export '(define reset-domain))
+(in-package :ucpop)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 1. Variables
@@ -148,7 +144,7 @@
 (defun DEFEFFECT (vlst &key effect forall when likely ranking)
   (when likely (error "Probability not implemented."))
   (dolist (f (parm-vars forall))
-    (unless (variable? f) 
+    (unless (variable:variable? f) 
       (error "attempt to univerally quantify constant [~a]" f))
     (when (member f vlst)
       (error "multiple definition of variable [~a]" f))
@@ -192,7 +188,7 @@
     ((:exists :forall)
      (let ((vs nil))
        (dolist (v (cdadr eqn))
-	 (when (and (variable? v) (not (member v vars)))
+	 (when (and (variable:variable? v) (not (member v vars)))
 	   (push v vars) (push v vs)))
        (when (null vs) (error "No new variables defined in ~a" eqn))
        (list (car eqn)
@@ -207,7 +203,7 @@
 (defun DEFAXIOM (name &key context implies)
   (let ((vars nil))
     (dolist (v (cdr implies))
-      (when (and (variable? v) (not (member v vars)))
+      (when (and (variable:variable? v) (not (member v vars)))
 	(push v vars)))
     (setf context (convert-eqn context))
     (test-wd context vars)
@@ -233,7 +229,7 @@
      (unless (null (cdddr wd)) (cerror "" "illegal expression: ~a" wd))
      (test-term (cadr wd) t)
      (dolist (v (cdadr wd))
-       (when (and (variable? v) (not (member v vlst))) (push v vlst)))
+       (when (and (variable:variable? v) (not (member v vlst))) (push v vlst)))
      (test-wd (caddr wd) vlst))
     ((:eq :neq)
      (unless (null (cdddr wd)) (cerror "" "illegal expression: ~a" wd))
@@ -265,14 +261,14 @@
 
 (defun TEST-ARGUMENTS (as vlst)
   (dolist (p as)
-    (when (and (listp vlst) (variable? p) (not (my-member p vlst)))
+    (when (and (listp vlst) (variable:variable? p) (not (my-member p vlst)))
       (cerror "" "unbound variable ~a" p))
     (when (consp p) (cerror "" "illegal constant ~a" p))))
 
 (defun TEST-TYPED-VAR (v vlst)
   (unless (and (consp v)
-	       (symbolp (car v)) (not (variable? (car v)))
-	       (variable? (cadr v)) (null (cddr v))
+	       (symbolp (car v)) (not (variable:variable? (car v)))
+	       (variable:variable? (cadr v)) (null (cddr v))
 	       (not (member (cadr v) vlst)))
     (cerror "" "illegal typed variable ~a" v)))
 
@@ -400,7 +396,7 @@
   "This routine functions as a setf to bind variables"
   (do* ((a args (cddr a)))
       ((null a) ret)
-    (if (and (cdr a) (variable? (car a)))
+    (if (and (cdr a) (variable:variable? (car a)))
 	(push (cons (car a) (cadr a)) ret)
       (error "illegal bindings"))))
 

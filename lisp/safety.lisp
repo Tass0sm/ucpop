@@ -1,7 +1,4 @@
-
-(in-package "UCPOP")
-(use-package "VARIABLE")
-
+(in-package :ucpop)
 
 ;;; Introduce safety constraints defined in CNF.
 ;;;
@@ -145,7 +142,7 @@
 	((listp l)
 	 (mapcar #'(lambda (e) (replace-binding e binding)) l))
 	(t
-	 (if (variable? l)
+	 (if (variable:variable? l)
 	     (cdr (assoc l binding))
 	   l))))
 

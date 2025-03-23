@@ -48,10 +48,7 @@
 ;;;    links or open conditions.  
 ;;;
 
-(in-package "UCPOP")
-(use-package "VARIABLE")
-
-#+:clim-2 (import '(vcr:vcr-frame))
+(in-package :ucpop)
 
 (defvar *nodes-visited*)
 (defvar *d-sep* t)			; Use Peot and Smith's delay technique

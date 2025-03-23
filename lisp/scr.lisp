@@ -10,9 +10,19 @@
   When you first acquire this software please send mail to
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "SC")
+(defpackage :sc
+  (:use :common-lisp)
+  (:export
+   #:make-sc
+   #:rule
+   #:def-clause
+   #:def-action
+   #:isrch
+   #:srch
+   #:assertion
+   #:sort-entries))
 
-(export '(make-sc rule def-clause def-action isrch srch assertion sort-entries))
+(in-package :sc)
 
 (defvar *verbose* nil)
 

@@ -23,7 +23,7 @@
 ;;; There are no guarantees that this file is up-to-date with the
 ;;; domains file.
 
-(in-package "UCPOP")
+(in-package :ucpop)
 
 (setq *all-tests*
     (list

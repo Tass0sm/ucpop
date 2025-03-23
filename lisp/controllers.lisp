@@ -10,7 +10,7 @@
   when you first acquire this software please send mail to
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "UCPOP")
+(in-package :ucpop)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 5. special purpose search controllers

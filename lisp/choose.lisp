@@ -10,10 +10,23 @@
   When you first acquire this software please send mail to
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "CHOICE")
 
-(export '(reject select rank prefer partition p-clear p-sort p-best 
-	  new-choice choice-entry *select-reject*))
+(defpackage :choice
+  (:use :common-lisp)
+  (:export
+   #:reject
+   #:select
+   #:rank
+   #:prefer
+   #:partition
+   #:p-clear
+   #:p-sort
+   #:p-best
+   #:new-choice
+   #:choice-entry
+   #:*select-reject*))
+
+(in-package :choice)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;

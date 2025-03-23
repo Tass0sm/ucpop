@@ -10,7 +10,7 @@
   When you first acquire this software please send mail to
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "UCPOP")
+(in-package :ucpop)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;  3. This file contains a set of test problems.  Some of them work,

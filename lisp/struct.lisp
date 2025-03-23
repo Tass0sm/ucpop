@@ -10,10 +10,7 @@
   when you first acquire this software please send mail to
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "UCPOP")
-
-(use-package "VARIABLE")
-(export '(*verbose*))
+(in-package :ucpop)
 
 (defvar *verbose* nil)			; Print whole plan?
 

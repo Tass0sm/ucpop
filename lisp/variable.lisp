@@ -17,13 +17,24 @@
 ;;; 
 ;;;
 
-(in-package "VARIABLE")
+(defpackage :variable
+  (:use :common-lisp)
+  (:export
+   #:unify
+   #:unify-args
+   #:bind-variable
+   #:instantiate-term
+   #:add-bind
+   #:new-bindings
+   #:variable?
+   #:uniquify-var
+   #:test-equivalence
+   #:*unify-count*
+   #:*compute-rank-unifies*
+   #:*computing-rank*
+   #:*add-bind-count*))
 
-(export '(unify unify-args bind-variable instantiate-term
-	  add-bind new-bindings variable? uniquify-var
-	  test-equivalence
-	  *unify-count* *compute-rank-unifies* 
-	  *computing-rank* *add-bind-count*))
+(in-package :variable)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; Outline of this file

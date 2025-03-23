@@ -10,25 +10,9 @@
   When you first acquire this software please send mail to 
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "UCPOP")
+(in-package :ucpop)
 
-(export '(*version*))
-(defconstant *version* "4.0.8")
-
-#+:clim-2 (import '(vcr:VCR-RECORD-RANK
-		    vcr:PDB-NEW
-		    vcr:PDB-LOAD
-		    vcr:PDB-END
-		    vcr:PDB-RECORD
-		    vcr:PDB-STOP
-		    vcr:PDB-SETUP
-		    vcr:PDB-DISPLAY
-		    vcr:PDB-SAVE
-		    vcr:PDB-RESTART
-		    ))
-
-(export '(define reset-domain trace-scr untrace-scr profile 
-	  show-profile operator axiom fact problem clause scr))
+;; (defconstant *version* "4.0.8")
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;; 1. Variables

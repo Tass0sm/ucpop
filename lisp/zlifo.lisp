@@ -33,7 +33,7 @@
 ;; domains containing axioms and operators with universally quantified
 ;; variables. The code is not optimized.
 
-(in-package "UCPOP")
+(in-package :ucpop)
 
 (defvar *zlifo-is-on* nil)
 (defvar *zlifo-d-sep* nil)

@@ -10,11 +10,23 @@
   When you first acquire this software please send mail to
   bug-ucpop@cs.washington.edu; the same address should be used for problems."
 
-(in-package "RULE-NET")
+(defpackage :rule-net
+  (:use :common-lisp)
+  (:export
+   #:defclause
+   #:defrule
+   #:defdemon
+   #:defnet
+   #:trace-rule
+   #:untrace-rule
+   #:assertion
+   #:variable$
+   #:dump-firings
+   #:clear-firings
+   #:profile
+   #:show-profile))
 
-(export '(defclause defrule defdemon defnet trace-rule untrace-rule 
-	  assertion variable$ clear-firings profile show-profile
-	  collect-firings dump-firings ignore-firings))
+(in-package :rule-net)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;
