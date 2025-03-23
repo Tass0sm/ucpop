@@ -1,0 +1,5 @@
+The original ucpop tar was downloaded from this link:
+http://www.ai.mit.edu/courses/16.412J/ucpop41.tar
+
+The above link was found at:
+http://www.ai.mit.edu/courses/16.412J/ucpop.html
