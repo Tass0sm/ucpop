@@ -9,8 +9,6 @@ import unified_planning as up
 from unified_planning import engines
 from unified_planning.plans import PartialOrderPlan
 
-from ucpop import ucpop
-
 
 class UCPOPEngineImpl(up.engines.Engine,
                       up.engines.mixins.OneshotPlannerMixin):
