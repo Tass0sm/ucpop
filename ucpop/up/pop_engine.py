@@ -2,12 +2,14 @@
 """
 
 import random
+from collections import defaultdict
 from typing import Callable, IO, Optional
 from functools import reduce
 
 import unified_planning as up
 from unified_planning import engines
-from unified_planning.plans import PartialOrderPlan
+from unified_planning.engines import PlanGenerationResultStatus
+from unified_planning.plans import ActionInstance
 
 from ucpop.pop import pop
 
@@ -45,6 +47,26 @@ class POPEngineImpl(up.engines.Engine,
     def supports(problem_kind):
         return problem_kind <= POPEngineImpl.supported_kind()
 
+    def _action_adjacency_list_from_plan(self, plan):
+        id_to_instance_map = {}
+
+        for step in plan.steps:
+            if step.id in [0, -1]:
+                continue
+            id_to_instance_map[step.id] = ActionInstance(step.action)
+
+        graph = defaultdict(list)
+        # Build the directed graph
+        for a, b in plan.ordering:
+            if a in [0, -1] or b in [0, -1] or a == b:
+                continue
+            a_inst = id_to_instance_map[a]
+            b_inst = id_to_instance_map[b]
+            print(f"{a_inst} -> {b_inst}")
+            graph[a_inst].append(b_inst)
+
+        return graph
+
     def _solve(
             self,
             problem: 'up.model.Problem',
@@ -54,65 +76,24 @@ class POPEngineImpl(up.engines.Engine,
     ) -> 'up.engines.PlanGenerationResult':
         env = problem.environment
 
-        # # First we ground the problem
-        # with env.factory.Compiler(problem_kind=problem.kind, compilation_kind=up.engines.CompilationKind.GROUNDING) as grounder:
-        #     grounding_result = grounder.compile(problem, up.engines.CompilationKind.GROUNDING)
-        # grounded_problem = grounding_result.problem
+        # First we ground the problem
+        with env.factory.Compiler(problem_kind=problem.kind, compilation_kind=up.engines.CompilationKind.GROUNDING) as grounder:
+            grounding_result = grounder.compile(problem, up.engines.CompilationKind.GROUNDING)
+        grounded_problem = grounding_result.problem
 
-        # # We store the grounded actions in a list
-        # actions = list(grounded_problem.instantaneous_actions)
+        plan, info = pop(grounded_problem)
 
-        # aima_problem = self._convert_problem(problem)
-        # planner = PartialOrderPlanner(aima_problem)
-        # constraints, causal_links = planner.execute(display=False)
-
-        plan, info = pop(problem)
-
-        status = up.engines.PlanGenerationResultStatus.TIMEOUT
-        return up.engines.PlanGenerationResult(status, None, self.name)
-
-        # # The candidate plan, initially empty
-        # plan = up.plans.SequentialPlan([])
-
-        # # Ask for an instance of a PlanValidator by name
-        # # (`sequential_plan_validator` is a python implementation of the
-        # # PlanValidator operation mode offered by the UP library)
-        # with env.factory.PlanValidator(name='sequential_plan_validator') as pv:
-        #     counter = 0
-        #     while True:
-        #         # With a certain probability, restart from scratch to avoid dead-ends
-        #         if random.random() < self.restart_probability:
-        #             plan = up.plans.SequentialPlan([])
-        #         else:
-        #             # Select a random action
-        #             a = random.choice(actions)
-        #             # Create the relative action instance
-        #             ai = up.plans.ActionInstance(a)
-        #             # Append the action to the plan
-        #             plan.actions.append(ai)
-
-        #             # Check plan validity
-        #             res = pv.validate(grounded_problem, plan)
-        #             if res:
-        #                 # If the plan is valid, lift the action instances and
-        #                 # return the resulting plan
-        #                 resplan = plan.replace_action_instances(grounding_result.map_back_action_instance)
-        #                 # Sanity check
-        #                 assert pv.validate(problem, resplan)
-        #                 status = up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING
-        #                 return up.engines.PlanGenerationResult(status, resplan, self.name)
-        #             else:
-        #                 # If the plan is invalid, check if the reason is action
-        #                 # applicability (as opposed to goal satisfaction)
-        #                 einfo = res.log_messages[0].message
-        #                 if 'Goals' not in einfo:
-        #                     # If the plan is not executable, remove the last action
-        #                     plan.actions.pop()
-        #             # Limit the number of tries, according to the user specification
-        #             counter += 1
-        #             if self.max_tries is not None and counter >= self.max_tries:
-        #                 status = up.engines.PlanGenerationResultStatus.TIMEOUT
-        #                 return up.engines.PlanGenerationResult(status, None, self.name)
+        if plan:
+            status = PlanGenerationResultStatus.SOLVED_SATISFICING
+            action_adjacency_list = self._action_adjacency_list_from_plan(plan)
+            return up.engines.PlanGenerationResult(
+                status, up.plans.PartialOrderPlan(action_adjacency_list),
+                self.name, metrics={}
+            )
+            
+        else:
+            status = PlanGenerationResultStatus.UNSOLVABLE_PROVEN
+            return up.engines.PlanGenerationResult(status, None, self.name)
 
     def destroy(self):
         pass
