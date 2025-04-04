@@ -11,7 +11,7 @@ from unified_planning import engines
 from unified_planning.engines import PlanGenerationResultStatus
 from unified_planning.plans import ActionInstance
 
-from ucpop.pop import pop
+from ucpop.pop import POP
 
 
 class POPEngineImpl(up.engines.Engine,
@@ -57,13 +57,14 @@ class POPEngineImpl(up.engines.Engine,
 
         graph = defaultdict(list)
         # Build the directed graph
-        for a, b in plan.ordering:
-            if a in [0, -1] or b in [0, -1] or a == b:
-                continue
-            a_inst = id_to_instance_map[a]
-            b_inst = id_to_instance_map[b]
-            print(f"{a_inst} -> {b_inst}")
-            graph[a_inst].append(b_inst)
+        for u, vs in plan.adj_list.items():
+            for v in vs:
+                if u in [0, -1] or v in [0, -1] or u == v:
+                    continue
+                u_inst = id_to_instance_map[u]
+                v_inst = id_to_instance_map[v]
+                print(f"{u_inst} -> {v_inst}")
+                graph[u_inst].append(v_inst)
 
         return graph
 
@@ -81,7 +82,7 @@ class POPEngineImpl(up.engines.Engine,
             grounding_result = grounder.compile(problem, up.engines.CompilationKind.GROUNDING)
         grounded_problem = grounding_result.problem
 
-        plan, info = pop(grounded_problem)
+        plan = POP(grounded_problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
