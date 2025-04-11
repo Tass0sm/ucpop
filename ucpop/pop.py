@@ -43,7 +43,8 @@ class POPSearchNode:
             if new_plan.threatens(a_add, link):
                 threats_from_new_step.append((a_add, link))
 
-        new_threats = self.threats.union(threats_to_new_link).union(threats_from_new_step)
+        added_threats = threats_to_new_link + threats_from_new_step
+        new_threats = self.threats.union(added_threats)
         return POPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
@@ -159,15 +160,11 @@ class POP:
         # possible plans when a_add is a newly instantiated step
         new_step_plans = [plan_with_new_step_from(action) for action in self.problem.actions if action_could_work(action)]
 
-        def step_could_work(step):
-            # TODO: must check that it is possibly prior to a_need
-            return q in [e for e in step.effects]
-
         def plan_with_reused_step_from(step):
             return node.with_reused_step(step, q, a_need)
 
         # possible plans when a_add is a reused step
-        reused_step_plans = [plan_with_reused_step_from(step) for step in node.plan.steps if step_could_work(step)]
+        reused_step_plans = [plan_with_reused_step_from(step) for step in node.plan.reusable_steps(q, a_need)]
 
         # all possible plans derived from all possible choices of a_add
         daughter_plans = new_step_plans + reused_step_plans
@@ -207,4 +204,4 @@ class POP:
                                       pop_rank_fn,
                                       search_limit)
 
-        return goal_node.plan
+        return goal_node.plan if goal_node else None

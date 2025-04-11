@@ -15,7 +15,7 @@ class PlanStep:
     id: int
     preconditions: FrozenSet[FNode] = field(default_factory=frozenset)
     effects: FrozenSet[FNode] = field(default_factory=frozenset)
-    action: Optional[Action] = 1,
+    action: Optional[Action] = None
 
     def __repr__(self):
         return f"PlanStep(id={self.id}, preconditions={self.preconditions}, effects={self.effects})"
@@ -95,6 +95,12 @@ class Plan:
         # TODO: add stuff for identifying if step is not already correctly ordered
         return self.possibly_between(step, link.step_p, link.step_c) and \
             ~link.condition in step.effects
+
+    def reusable_steps(self, q: FNode, a_need: PlanStep):
+        def step_could_work(step):
+            return q in [e for e in step.effects] and self.possibly_before(step, a_need)
+
+        return list(filter(step_could_work, self.steps))
 
     def possibly_between(self, step: PlanStep, step_a: PlanStep, step_b: PlanStep):
         return self.possibly_after(step, step_a) and self.possibly_before(step, step_b)
