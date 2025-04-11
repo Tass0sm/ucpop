@@ -102,13 +102,25 @@ class Plan:
     # TODO: Implement the two following functions with a maintained transitive
     # closure graph.
     
-    def possibly_before(self, step: PlanStep, other: PlanStep):
-        """Current slow implementation: DFS from step to see if other is reachable.
+    def possibly_after(self, step: PlanStep, other: PlanStep):
+        """Current slow implementation: DFS from step to see if other is
+        reachable. If other is reachable, step is not possibly after other
+        (False). Otherwise true.
+
         """
         if other == step:
             return False # strict partial order?
+        if step.id == 0:
+            return False # the start node is never after anything else
+        if step.id == -1:
+            return True # the end node is always after anything else
+        if other.id == 0:
+            return True # everything is after the start node
+        if other.id == -1:
+            return False # nothing can be after the end node
         if step.id not in self.adj_list:
-            return False
+            return False # if step is not in the graph anywhere, consider it to
+                         # not be part of the partial order
 
         stack = [step]
         visited = set()
@@ -116,7 +128,7 @@ class Plan:
             current = stack.pop()
 
             if current == other:
-                return True
+                return False
 
             visited |= {current}
 
@@ -124,15 +136,27 @@ class Plan:
                 if child not in visited:
                     stack.append(child)
 
-        return False
+        return True
 
-    def possibly_after(self, step: PlanStep, other: PlanStep):
-        """Current slow implementation: DFS from other to see if step is reachable.
+    def possibly_before(self, step: PlanStep, other: PlanStep):
+        """Current slow implementation: DFS from other to see if step is
+        reachable. If its reachable, then step is not possibly before other
+        (false). Otherwise true.
+
         """
         if step == other:
             return False # strict partial order?
+        if step.id == 0:
+            return True # the start node is always before anything else
+        if step.id == -1:
+            return False # the end node can't be possibly before anything else
+        if other.id == 0:
+            return False # nothing can be before the start node
+        if other.id == -1:
+            return True # everything is before the end node
         if other.id not in self.adj_list:
-            return False
+            return False # if step is not in the graph anywhere, consider it to
+                         # not be part of the partial order
 
         stack = [other]
         visited = set()
@@ -140,7 +164,7 @@ class Plan:
             current = stack.pop()
 
             if current == step:
-                return True
+                return False
 
             visited |= {current}
 
@@ -148,7 +172,7 @@ class Plan:
                 if child not in visited:
                     stack.append(child)
 
-        return False
+        return True
 
     # def add_link(self, step_p, condition, step_c):
     #     l = Link(step_p, condition, step_c)
