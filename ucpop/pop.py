@@ -60,6 +60,10 @@ class POPSearchNode:
         new_threats = self.threats.union(threats_to_new_link)
         return POPSearchNode(new_plan, new_agenda, new_threats)
 
+    def with_new_constraint(self, first_id: int, second_id: int):
+        new_plan = self.plan.with_new_constraint(first_id, second_id)
+        return POPSearchNode(new_plan, self.agenda, self.threats)
+
     def __le__(self, other):
         """Compare the size of self.plan to other.plan"""
         return (len(self.plan.steps) + len(self.agenda) + len(self.threats)) <= \
@@ -107,44 +111,22 @@ class POP:
         else:
             return None, None
 
-    def threatens(step, link):
-        return ~link.condition in step.effects
-
-    def can_demote(a_t, link, plan):
-        return plan.can_constrain(a_t.id, link.step_p.id)
-
-    def can_promote(a_t, link, plan):
-        return plan.can_constrain(link.step_c.id, a_t.id)
-
-    def protect(link, a_t, plan):
-        demotion_c = can_demote(a_t, link, plan)
-        promotion_c = can_promote(a_t, link, plan)
-        if demotion_c and promotion_c:
-            return random.choice([demotion_c, promotion_c])
-        elif demotion_c:
-            return demotion_c
-        elif promotion_c:
-            return promotion_c
-        else:
-            print(f"Couldn't promote or demote to resolve threat of {a_t} to {link}")
-            return None
-
-    def protect_causal_links(plan):
-        for link in plan.links:
-            for a_t in [step for step in plan.steps if threatens(step, link)]:
-                protecting_edge = protect(link, a_t, plan)
-                if not protecting_edge:
-                    return False
-                plan.add_edge(*protecting_edge)
-
-        return True
-
     def _get_daughter_nodes_for_threat(self, node: POPSearchNode, flaw):
         """This corresponds to the causal link protection step in the POP
         non-deterministic pseudocode"""
         a_t, link = flaw
-        breakpoint()
-        return []
+        demotion_c = node.plan.can_demote(a_t, link)
+        promotion_c = node.plan.can_promote(a_t, link)
+        if demotion_c and promotion_c:
+            return [node.with_new_constraint(*demotion_c),
+                    node.with_new_constraint(*promotion_c)]
+        elif demotion_c:
+            return [node.with_new_constraint(*demotion_c)]
+        elif promotion_c:
+            return [node.with_new_constraint(*promotion_c)]
+        else:
+            # Couldn't promote or demote to resolve threat so no daughter plans
+            return []
 
     def _get_daughter_nodes_for_opencond(self, node: POPSearchNode, flaw):
         """This corresponds to the action selection step in the POP
@@ -185,7 +167,7 @@ class POP:
 
         # step 1
         def pop_goal_p(node):
-            return len(node.agenda) == 0
+            return len(node.agenda) == 0 and len(node.threats) == 0
 
         def pop_daughters_fn(node):
             # step 2

@@ -4,7 +4,10 @@ from collections.abc import Iterable
 from typing import Any, Optional, FrozenSet
 
 from frozendict import frozendict
+
+import unified_planning as up
 from unified_planning.model import FNode, Action
+from unified_planning.plans import ActionInstance
 
 from ucpop.utils import effects_to_conjuncts
 
@@ -25,34 +28,6 @@ class Link:
     step_p: PlanStep
     condition: FNode
     step_c: PlanStep
-
-
-# def has_cycle(graph, start):
-#     """Detects cycles using an iterative DFS with an explicit stack."""
-#     stack = [start]  # Stack for DFS
-#     in_stack = set([start])  # Tracks nodes in the current DFS path
-#     visited = set()
-
-#     while stack:
-#         node = stack[-1]  # Peek the top of the stack
-#         if node not in visited:
-#             visited.add(node)
-
-#         has_unvisited_child = False
-#         for neighbor in graph[node]:
-#             if neighbor in in_stack:  # Cycle detected
-#                 return True
-#             if neighbor not in visited:
-#                 stack.append(neighbor)
-#                 in_stack.add(neighbor)
-#                 has_unvisited_child = True
-#                 break  # Process one child at a time
-
-#         if not has_unvisited_child:
-#             stack.pop()
-#             in_stack.remove(node)
-
-#     return False  # No cycle detected
 
 
 def add_edges(adj_list: frozendict[int, FrozenSet[int]], new_edges: dict[int, Iterable[int]]):
@@ -91,10 +66,79 @@ class Plan:
         new_links = self.links.union({new_link})
         return Plan(new_steps, new_adj_list, new_links, self.highest_id), new_link
 
+    def with_new_constraint(self, first_id: int, second_id: int):
+        new_adj_list = add_edges(self.adj_list, { first_id: [second_id] })
+        return Plan(self.steps, new_adj_list, self.links, self.highest_id)
+
     def threatens(self, step: PlanStep, link: Link):
         # TODO: add stuff for identifying if step is not already correctly ordered
         return self.possibly_between(step, link.step_p, link.step_c) and \
             ~link.condition in step.effects
+
+    def can_constrain(self, u, v):
+        """Slow function to check if adding an edge makes the partial order
+        inconsistent. TODO: change this class to be a graph anyway.
+        """
+
+        # if edge already exists or its a self-loop
+        if v in self.adj_list[u] or (u == v):
+            return (u, v)
+
+        if u == 0:
+            return True # the start node can always be before another
+        if v == -1:
+            return True # the end node can always be after another
+        if u == -1:
+            return False # the end node can never be before another
+        if v == 0:
+            return False # the start node can never be after another
+
+        # current graph with additional edge
+        graph = add_edges(self.adj_list, { u: [v] })
+
+        # contains both gray (in stack) and black nodes (popped from stack)
+        visited = set()
+
+        # Check for cycles using iterative DFS (without popping until finished
+        # in order to identify cycles by checking if a node is in the stack)
+        # TODO: consider changing this to just start with step 0
+        for node in self.steps:
+
+            # optimization, skip nodes that have already been DFS-ed
+            if node.id in visited:
+                continue
+
+            stack = [node.id]
+            stack_set = set([node.id]) # set for fast membership test
+
+            while stack:
+                current = stack[-1]
+                # contains both gray (in stack) and black nodes (popped from stack)
+                visited |= {current}
+
+                # only pop when fully explored to keep everything in the stack
+                has_white_child = False
+                for child in graph.get(current, []):
+                    if child in stack_set:
+                        # if edge reaches back into stack, there is a cycle
+                        return None
+                    if child not in visited:
+                        has_white_child = True
+                        stack.append(child)
+                        stack_set |= {child}
+
+                if not has_white_child:
+                    stack.pop()
+                    stack_set -= {current}
+
+        # No cycle, still consistent
+        return (u, v)
+
+    def can_demote(self, a_t, link):
+        return self.can_constrain(a_t.id, link.step_p.id)
+
+    def can_promote(self, a_t, link):
+        return self.can_constrain(link.step_c.id, a_t.id)
 
     def reusable_steps(self, q: FNode, a_need: PlanStep):
         def step_could_work(step):
@@ -193,28 +237,6 @@ class Plan:
     #     if (u, v) not in self.ordering:
     #         self.ordering.append((u, v))
 
-    # def can_constrain(self, u, v):
-    #     """Slow function to check if adding an edge makes the partial order
-    #     inconsistent. TODO: change this class to be a graph anyway.
-    #     """
-
-    #     if (u, v) in self.ordering or (u == v):
-    #         return (u, v)
-
-    #     graph = defaultdict(set)
-
-    #     # Build the directed graph
-    #     for a, b in self.ordering:
-    #         graph[a].add(b)
-
-    #     # Add the new constraint
-    #     graph[u].add(v)
-
-    #     # Check for cycles using iterative DFS
-    #     for node in self.steps:
-    #         if has_cycle(graph, node.id):
-    #             return None  # Cycle detected, inconsistent
-    #     return (u, v)  # No cycle, still consistent
 
     # def new_step(self, action):
     #     effect_conjuncts = effects_to_conjuncts(action.effects)
