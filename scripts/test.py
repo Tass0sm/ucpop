@@ -50,7 +50,7 @@ print(problem)
 ### Solving
 
 # %%
-with OneshotPlanner(name='pop') as planner:
+with OneshotPlanner(name='pop2') as planner:
     result = planner.solve(problem)
     if result.status == up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING:
         print("Planner returned: %s" % result.plan)

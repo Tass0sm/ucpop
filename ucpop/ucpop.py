@@ -12,13 +12,13 @@ from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect
 
 from ucpop.search import best_first_search
-from ucpop.classes import PlanStep, Link, BasePlan as Plan
+from ucpop.classes import PlanStep, Link, Plan
 from ucpop.utils import initial_values_to_conjuncts
 
 
 
 @dataclass(eq=True, frozen=True)
-class POPSearchNode:
+class UCPOPSearchNode:
     plan: Plan
     agenda: FrozenSet[FNode]
     threats: FrozenSet[Tuple[PlanStep, Link]]

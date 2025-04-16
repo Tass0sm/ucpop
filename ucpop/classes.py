@@ -22,6 +22,7 @@ class PlanStep:
 
     def __repr__(self):
         return f"PlanStep(id={self.id}, preconditions={self.preconditions}, effects={self.effects})"
+
     
 @dataclass(eq=True, frozen=True)
 class Link:
@@ -39,7 +40,7 @@ def add_edges(adj_list: frozendict[int, FrozenSet[int]], new_edges: dict[int, It
 
 
 @dataclass(eq=True, frozen=True)
-class Plan:
+class BasePlan:
     steps: FrozenSet[PlanStep]                # List of steps in the plan.
     adj_list: frozendict[int, int]            # Adjacency list of step ids
     links: FrozenSet[Link]                    # List of causal links.
@@ -56,7 +57,7 @@ class Plan:
         new_adj_list = add_edges(self.adj_list, { 0: [a_add.id],
                                                   a_add.id: [a_need.id, -1] })
         new_links = self.links.union({new_link})
-        return Plan(new_steps, new_adj_list, new_links, a_add.id), a_add, new_link
+        return BasePlan(new_steps, new_adj_list, new_links, a_add.id), a_add, new_link
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
         new_link = Link(a_add, q, a_need)
@@ -64,11 +65,11 @@ class Plan:
         new_steps = self.steps
         new_adj_list = add_edges(self.adj_list, { a_add.id: [a_need.id] })
         new_links = self.links.union({new_link})
-        return Plan(new_steps, new_adj_list, new_links, self.highest_id), new_link
+        return BasePlan(new_steps, new_adj_list, new_links, self.highest_id), new_link
 
     def with_new_constraint(self, first_id: int, second_id: int):
         new_adj_list = add_edges(self.adj_list, { first_id: [second_id] })
-        return Plan(self.steps, new_adj_list, self.links, self.highest_id)
+        return BasePlan(self.steps, new_adj_list, self.links, self.highest_id)
 
     def threatens(self, step: PlanStep, link: Link):
         # TODO: add stuff for identifying if step is not already correctly ordered
@@ -224,28 +225,7 @@ class Plan:
 
         return True
 
-    # def add_link(self, step_p, condition, step_c):
-    #     l = Link(step_p, condition, step_c)
-    #     self.links.append(l)
 
-    # def add_step(self, step):
-    #     if step not in self.steps:
-    #         self.steps.append(step)
-    #         self.highest_id = step.id
-
-    # def add_edge(self, u, v):
-    #     if (u, v) not in self.ordering:
-    #         self.ordering.append((u, v))
-
-
-    # def new_step(self, action):
-    #     effect_conjuncts = effects_to_conjuncts(action.effects)
-    #     return PlanStep(self.highest_id + 1, frozenset(action.preconditions), effect_conjuncts, action)
-
-
-# @dataclass
-# class PlanFlaws:
-#     agenda: List[PlanStep]            # List of steps in the plan.
-#     ordering: List[Tuple[int, int]]  # List of (id1, id2) tuples.
-#     links: List[Link]                # List of causal links.
-#     highest_id: int = 0
+@dataclass(eq=True, frozen=True)
+class PartialActionPlan(BasePlan):
+    pass

@@ -1,4 +1,4 @@
-"""Implementation of POP based on
+"""Implementation of POP supporting action schemata based on
 https://homes.cs.washington.edu/~weld/papers/pi.pdf
 
 """
@@ -12,13 +12,12 @@ from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect
 
 from ucpop.search import best_first_search
-from ucpop.classes import PlanStep, Link, BasePlan as Plan
+from ucpop.classes import PlanStep, Link, PartialActionPlan as Plan
 from ucpop.utils import initial_values_to_conjuncts
 
 
-
 @dataclass(eq=True, frozen=True)
-class POPSearchNode:
+class POP2SearchNode:
     plan: Plan
     agenda: FrozenSet[FNode]
     threats: FrozenSet[Tuple[PlanStep, Link]]
@@ -45,7 +44,7 @@ class POPSearchNode:
 
         added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
-        return POPSearchNode(new_plan, new_agenda, new_threats)
+        return POP2SearchNode(new_plan, new_agenda, new_threats)
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
         new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need)
@@ -58,11 +57,11 @@ class POPSearchNode:
                 threats_to_new_link.append((step, new_link))
 
         new_threats = self.threats.union(threats_to_new_link)
-        return POPSearchNode(new_plan, new_agenda, new_threats)
+        return POP2SearchNode(new_plan, new_agenda, new_threats)
 
     def with_new_constraint(self, first_id: int, second_id: int):
         new_plan = self.plan.with_new_constraint(first_id, second_id)
-        return POPSearchNode(new_plan, self.agenda, self.threats)
+        return POP2SearchNode(new_plan, self.agenda, self.threats)
 
     def __le__(self, other):
         """Compare the size of self.plan to other.plan"""
@@ -75,22 +74,23 @@ class POPSearchNode:
             (len(other.plan.steps) + len(other.agenda) + len(other.threats))
 
 
-class POPFlawType(Enum):
+class POP2FlawType(Enum):
     THREAT = 0
     OPENCOND = 1
 
 
-class POP:
+class POP2:
 
     def __init__(self, problem: Problem):
         self.problem = problem
 
-    def _create_initial_node(self) -> POPSearchNode:
+    def _create_initial_node(self) -> POP2SearchNode:
         # Plan
         start_step = PlanStep(id=0, effects=initial_values_to_conjuncts(self.problem.initial_values))
         end_step = PlanStep(id=-1, preconditions=frozenset(self.problem.goals))
         plan = Plan(steps=frozenset([start_step, end_step]),
                     adj_list=frozendict({0: frozenset({-1})}),
+                    bindings=frozenset()
                     links=frozenset())
 
         # Agenda
@@ -99,19 +99,19 @@ class POP:
         # Threats
         threats = frozenset([])
 
-        return POPSearchNode(plan, agenda, threats)
+        return POP2SearchNode(plan, agenda, threats)
 
-    def _get_flaw(self, node: POPSearchNode) -> Tuple[Any, POPFlawType]:
+    def _get_flaw(self, node: POP2SearchNode) -> Tuple[Any, POP2FlawType]:
         """This corresponds to the goal selection step in the POP
         non-deterministic pseudocode"""
         if node.threats:
-            return next(iter(node.threats)), POPFlawType.THREAT
+            return next(iter(node.threats)), POP2FlawType.THREAT
         elif node.agenda:
-            return next(iter(node.agenda)), POPFlawType.OPENCOND
+            return next(iter(node.agenda)), POP2FlawType.OPENCOND
         else:
             return None, None
 
-    def _get_daughter_nodes_for_threat(self, node: POPSearchNode, flaw):
+    def _get_daughter_nodes_for_threat(self, node: POP2SearchNode, flaw):
         """This corresponds to the causal link protection step in the POP
         non-deterministic pseudocode"""
         a_t, link = flaw
@@ -128,7 +128,7 @@ class POP:
             # Couldn't promote or demote to resolve threat so no daughter plans
             return []
 
-    def _get_daughter_nodes_for_opencond(self, node: POPSearchNode, flaw):
+    def _get_daughter_nodes_for_opencond(self, node: POP2SearchNode, flaw):
         """This corresponds to the action selection step in the POP
         non-deterministic pseudocode"""
         q, a_need = flaw
@@ -153,10 +153,10 @@ class POP:
         return daughter_plans
 
 
-    def _get_daughter_nodes_for_flaw(self, node: POPSearchNode, flaw_type: POPFlawType, flaw):
-        if flaw_type == POPFlawType.THREAT:
+    def _get_daughter_nodes_for_flaw(self, node: POP2SearchNode, flaw_type: POP2FlawType, flaw):
+        if flaw_type == POP2FlawType.THREAT:
             return self._get_daughter_nodes_for_threat(node, flaw)
-        elif flaw_type == POPFlawType.OPENCOND:
+        elif flaw_type == POP2FlawType.OPENCOND:
             return self._get_daughter_nodes_for_opencond(node, flaw)
         else:
             return None
