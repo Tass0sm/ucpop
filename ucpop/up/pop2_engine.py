@@ -1,4 +1,4 @@
-"""Engine for POP in unified-planning
+"""Engine for POP2 in unified-planning
 """
 
 import random
@@ -9,13 +9,16 @@ from functools import reduce
 import unified_planning as up
 from unified_planning import engines
 from unified_planning.engines import PlanGenerationResultStatus
+from unified_planning.model import Parameter
 from unified_planning.plans import ActionInstance
 
-from ucpop.pop import POP
+from ucpop.variable import Var
+from ucpop.pop2 import POP2
 
 
-class POPEngineImpl(up.engines.Engine,
-                    up.engines.mixins.OneshotPlannerMixin):
+
+class POP2EngineImpl(up.engines.Engine,
+                     up.engines.mixins.OneshotPlannerMixin):
 
     def __init__(self, **options):
         # Read known user-options and store them for using in the `solve` method
@@ -27,7 +30,7 @@ class POPEngineImpl(up.engines.Engine,
 
     @property
     def name(self) -> str:
-        return "POP"
+        return "POP2"
 
     @staticmethod
     def supported_kind():
@@ -40,12 +43,13 @@ class POPEngineImpl(up.engines.Engine,
         supported_kind.set_time("DISCRETE_TIME")
         supported_kind.set_typing('FLAT_TYPING')
         supported_kind.set_fluents_type('OBJECT_FLUENTS')
-
+        supported_kind.set_conditions_kind("NEGATIVE_CONDITIONS")
+        supported_kind.set_conditions_kind("EQUALITIES")
         return supported_kind
 
     @staticmethod
     def supports(problem_kind):
-        return problem_kind <= POPEngineImpl.supported_kind()
+        return problem_kind <= POP2EngineImpl.supported_kind()
 
     def _action_adjacency_list_from_plan(self, plan):
         id_to_instance_map = {}
@@ -54,7 +58,15 @@ class POPEngineImpl(up.engines.Engine,
         for step in plan.steps:
             if step.id in [0, -1]:
                 continue
-            action_instance = ActionInstance(step.action)
+
+            def get_grounding(p: Parameter):
+                v = Var(p.name, p.type, step.id)
+                result = plan.bindings.get_grounding_or_variable(v)
+                assert not isinstance(result, Var), f"{v} isn't grounded"
+                return result
+
+            params = tuple(map(get_grounding, step.action.parameters))
+            action_instance = ActionInstance(step.action, params)
             id_to_instance_map[step.id] = action_instance
             graph[action_instance] = []
 
@@ -76,14 +88,8 @@ class POPEngineImpl(up.engines.Engine,
             timeout: Optional[float] = None,
             output_stream: Optional[IO[str]] = None
     ) -> 'up.engines.PlanGenerationResult':
-        env = problem.environment
 
-        # First we ground the problem
-        with env.factory.Compiler(problem_kind=problem.kind, compilation_kind=up.engines.CompilationKind.GROUNDING) as grounder:
-            grounding_result = grounder.compile(problem, up.engines.CompilationKind.GROUNDING)
-        grounded_problem = grounding_result.problem
-
-        plan = POP(grounded_problem).execute()
+        plan = POP2(problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
@@ -92,7 +98,6 @@ class POPEngineImpl(up.engines.Engine,
                 status, up.plans.PartialOrderPlan(action_adjacency_list),
                 self.name, metrics={}
             )
-            
         else:
             status = PlanGenerationResultStatus.UNSOLVABLE_PROVEN
             return up.engines.PlanGenerationResult(status, None, self.name)
@@ -102,4 +107,4 @@ class POPEngineImpl(up.engines.Engine,
 
 
 env = up.environment.get_environment()
-env.factory.add_engine('pop', __name__, 'POPEngineImpl')
+env.factory.add_engine('pop2', __name__, 'POP2EngineImpl')

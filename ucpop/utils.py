@@ -2,15 +2,12 @@ from typing import List, Dict
 from unified_planning.model import FNode, Effect
 
 
-def effects_to_conjuncts(effects: List[Effect]):
-    conjuncts = []
-    for e in effects:
-        if e.value.is_true():
-            conjuncts.append(e.fluent)
-        else:
-            conjuncts.append(~e.fluent)
+def effect_to_conjunct(e: Effect):
+    return e.fluent if e.value.is_true() else ~e.fluent
 
-    return frozenset(conjuncts)
+
+def effects_to_conjuncts(effects: List[Effect]):
+    return frozenset(map(effect_to_conjunct, effects))
 
 
 def initial_values_to_conjuncts(initial_values: Dict[FNode, FNode]):

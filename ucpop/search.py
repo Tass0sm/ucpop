@@ -1,4 +1,8 @@
 import heapq
+import logging
+import networkx as nx
+
+logger = logging.getLogger(__name__)
 
 
 def best_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
@@ -24,6 +28,13 @@ def best_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
         # get the next best node to explore
         _, current = heapq.heappop(search_queue)
         search_queue_set -= {current}
+
+        logger.info(f"Exploring: {current}")
+        # try:
+        #     logger.info(f"Plan: {current.plan.to_partial_order_plan()}")
+        # except nx.NetworkXUnfeasible:
+        #     print("NODE HAS A CYCLE!")
+        logger.info(f"Threats: {current.threats}")
 
         # if its the goal, end the search and return it
         if goal_p(current):
@@ -73,6 +84,13 @@ def depth_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
         # get the next best node to explore
         current = search_stack.pop()
         search_queue_set -= {current}
+
+        logger.info(f"Exploring: {current}")
+        try:
+            logger.info(f"Plan: {current.plan.to_partial_order_plan()}")
+        except nx.NetworkXUnfeasible:
+            print("NODE HAS A CYCLE!")
+        logger.info(f"Threats: {current.threats}")
 
         # if its the goal, end the search and return it
         if goal_p(current):

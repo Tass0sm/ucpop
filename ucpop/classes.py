@@ -1,15 +1,19 @@
+import logging
 from dataclasses import dataclass, field
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Any, Optional, FrozenSet
+from typing import Any, Optional, Union, Collection, FrozenSet
 
 from frozendict import frozendict
 
 import unified_planning as up
-from unified_planning.model import FNode, Action
+from unified_planning.model import OperatorKind, FNode, Action, Object
 from unified_planning.plans import ActionInstance
 
 from ucpop.utils import effects_to_conjuncts
+from ucpop.variable import Var, Bindings, Unifier, most_general_unification
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(eq=True, frozen=True)
@@ -22,6 +26,7 @@ class PlanStep:
 
     def __repr__(self):
         return f"PlanStep(id={self.id}, preconditions={self.preconditions}, effects={self.effects})"
+
     
 @dataclass(eq=True, frozen=True)
 class Link:
@@ -38,8 +43,8 @@ def add_edges(adj_list: frozendict[int, FrozenSet[int]], new_edges: dict[int, It
     return new_adj_list
 
 
-@dataclass(eq=True, frozen=True)
-class Plan:
+@dataclass(eq=True, frozen=True, kw_only=True)
+class BasePlan:
     steps: FrozenSet[PlanStep]                # List of steps in the plan.
     adj_list: frozendict[int, int]            # Adjacency list of step ids
     links: FrozenSet[Link]                    # List of causal links.
@@ -56,7 +61,7 @@ class Plan:
         new_adj_list = add_edges(self.adj_list, { 0: [a_add.id],
                                                   a_add.id: [a_need.id, -1] })
         new_links = self.links.union({new_link})
-        return Plan(new_steps, new_adj_list, new_links, a_add.id), a_add, new_link
+        return BasePlan(steps=new_steps, adj_list=new_adj_list, links=new_links, highest_id=a_add.id), a_add, new_link
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
         new_link = Link(a_add, q, a_need)
@@ -64,11 +69,11 @@ class Plan:
         new_steps = self.steps
         new_adj_list = add_edges(self.adj_list, { a_add.id: [a_need.id] })
         new_links = self.links.union({new_link})
-        return Plan(new_steps, new_adj_list, new_links, self.highest_id), new_link
+        return BasePlan(steps=new_steps, adj_list=new_adj_list, links=new_links, highest_id=self.highest_id), new_link
 
     def with_new_constraint(self, first_id: int, second_id: int):
         new_adj_list = add_edges(self.adj_list, { first_id: [second_id] })
-        return Plan(self.steps, new_adj_list, self.links, self.highest_id)
+        return BasePlan(self.steps, new_adj_list, self.links, self.highest_id)
 
     def threatens(self, step: PlanStep, link: Link):
         # TODO: add stuff for identifying if step is not already correctly ordered
@@ -251,31 +256,100 @@ class Plan:
 
         return up.plans.PartialOrderPlan(graph)
 
-    # def __repr__(self):
-    #     return f"{self.__class__.__name__}(adj_list={self.adj_list})"
 
-    # def add_link(self, step_p, condition, step_c):
-    #     l = Link(step_p, condition, step_c)
-    #     self.links.append(l)
+@dataclass(eq=True, frozen=True, kw_only=True)
+class PartialActionPlan(BasePlan):
+    bindings: Bindings
 
-    # def add_step(self, step):
-    #     if step not in self.steps:
-    #         self.steps.append(step)
-    #         self.highest_id = step.id
+    @staticmethod
+    def _separate_preconditions(preconditions, step_id):
+        def get_binding(precond):
+            if precond.is_equals():
+                x, y = precond.args
+                x = x.parameter()
+                y = y.parameter()
+                return (Var(x.name, x.type, step_id), Var(y.name, y.type, step_id), True)
+            elif (precond.is_not() and (~precond).is_equals()):
+                x, y = (~precond).args
+                x = x.parameter()
+                y = y.parameter()
+                return (Var(x.name, x.type, step_id), Var(y.name, y.type, step_id), False)
+            else:
+                return None
 
-    # def add_edge(self, u, v):
-    #     if (u, v) not in self.ordering:
-    #         self.ordering.append((u, v))
+        binding_preconds = []
+        logical_preconds = []
+        for pc in preconditions:
+            if (bc := get_binding(pc)):
+                binding_preconds.append(bc)
+            else:
+                logical_preconds.append(pc)
+
+        return binding_preconds, logical_preconds
+
+    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, unifier: Unifier):
+        new_id = self.highest_id + 1
+        binding_preconds, logical_preconds = PartialActionPlan._separate_preconditions(action.preconditions, new_id)
+        effect_conjuncts = effects_to_conjuncts(action.effects)
+        a_add = PlanStep(new_id, frozenset(logical_preconds), effect_conjuncts, action)
+        new_link = Link(a_add, q, a_need)
+
+        new_steps = self.steps.union({a_add})
+        new_adj_list = add_edges(self.adj_list, { 0: [a_add.id], a_add.id: [a_need.id, -1] })
+        new_links = self.links.union({new_link})
+
+        new_bindings = self.bindings.union(new_variables=[Var(p.name, p.type, new_id) for p in action.parameters],
+                                           new_constraints=(unifier + binding_preconds))
+
+        return (PartialActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=a_add.id),
+                a_add,
+                new_link,
+                logical_preconds)
+
+    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, unifier: Unifier):
+        new_link = Link(a_add, q, a_need)
+
+        new_steps = self.steps
+        new_adj_list = add_edges(self.adj_list, { a_add.id: [a_need.id] })
+        new_links = self.links.union({new_link})
+
+        new_bindings = self.bindings.union(new_constraints=unifier)
+
+        return PartialActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=self.highest_id), new_link
+
+    def with_new_constraint(self, first_id: int, second_id: int):
+        new_adj_list = add_edges(self.adj_list, { first_id: [second_id] })
+        return PartialActionPlan(steps=self.steps, adj_list=new_adj_list, links=self.links, bindings=self.bindings, highest_id=self.highest_id)
+
+    def with_new_binding(self, var: Var, obj: Object):
+        new_steps = self.steps
+        new_adj_list = self.adj_list
+        new_links = self.links
+        new_bindings = self.bindings.union(new_constraints=[(var, obj, True)])
+        return PartialActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=self.highest_id)
+
+    def reusable_steps(self, q: FNode, a_need: PlanStep):
+        q_step_id = a_need.id
+
+        def step_could_work(step):            
+            unifications = filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, step.id, self.bindings), step.effects))
+            if self.possibly_before(step, a_need) and (unifier := next(unifications, None)) is not None:
+                return step, unifier
+            else:
+                return False
+
+        reusable_steps = list(filter(None, map(step_could_work, self.steps)))
+        logger.info(f"len(reusable_steps) = {len(reusable_steps)}")
+        return reusable_steps
 
 
-    # def new_step(self, action):
-    #     effect_conjuncts = effects_to_conjuncts(action.effects)
-    #     return PlanStep(self.highest_id + 1, frozenset(action.preconditions), effect_conjuncts, action)
+    def threatens(self, step: PlanStep, link: Link):
+        if not self.possibly_between(step, link.step_p, link.step_c):
+            return False
 
+        for effect in step.effects:
+            unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
+            if unifier is not None and len(unifier) == 0:
+                return True
 
-# @dataclass
-# class PlanFlaws:
-#     agenda: List[PlanStep]            # List of steps in the plan.
-#     ordering: List[Tuple[int, int]]  # List of (id1, id2) tuples.
-#     links: List[Link]                # List of causal links.
-#     highest_id: int = 0
+        return False

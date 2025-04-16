@@ -1,10 +1,25 @@
+import logging
 import unified_planning
 from unified_planning.shortcuts import *
 
 import ucpop
 
 
+ucpop.search.logger.setLevel(logging.ERROR)
+ucpop.pop.logger.setLevel(logging.ERROR)
+ucpop.pop2.logger.setLevel(logging.ERROR)
+ucpop.classes.logger.setLevel(logging.ERROR)
+
+# set up logging to log file
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(message)s', # Format of log messages
+    # filename='test.log',
+    level=logging.INFO
+)
+
+
 Location = UserType('Location')
+Hat = UserType('Hat')
 
 robot_at = unified_planning.model.Fluent('robot_at', BoolType(), l=Location)
 robot_has_been_at = unified_planning.model.Fluent('robot_has_been_at', BoolType(), l=Location)
@@ -19,7 +34,11 @@ NLOC = 5
 locations = [unified_planning.model.Object('l%s' % i, Location) for i in range(NLOC)]
 problem.add_objects(locations)
 
-move = unified_planning.model.InstantaneousAction('move', l_from=Location, l_to=Location)
+hat1 = unified_planning.model.Object('hat1', Hat)
+hat2 = unified_planning.model.Object('hat2', Hat)
+problem.add_objects([hat1, hat2])
+
+move = unified_planning.model.InstantaneousAction('move', l_from=Location, l_to=Location, hat=Hat)
 l_from = move.parameter('l_from')
 l_to = move.parameter('l_to')
 move.add_precondition(connected(l_from, l_to))
@@ -42,15 +61,16 @@ problem.set_initial_value(connected(locations[3], locations[2]), True)
 problem.set_initial_value(connected(locations[2], locations[4]), True)
 problem.set_initial_value(connected(locations[3], locations[4]), True)
 
-problem.add_goal(robot_at(locations[-1]))
-problem.add_goal(robot_has_been_at(locations[2]))
-problem.add_goal(robot_has_been_at(locations[3]))
+problem.add_goal(robot_at(locations[2]))
+# problem.add_goal(robot_at(locations[-1]))
+# problem.add_goal(robot_has_been_at(locations[2]))
+# problem.add_goal(robot_has_been_at(locations[3]))
 print(problem)
 
 ### Solving
 
 # %%
-with OneshotPlanner(name='pop') as planner:
+with OneshotPlanner(name='pop2') as planner:
     result = planner.solve(problem)
     if result.status == up.engines.PlanGenerationResultStatus.SOLVED_SATISFICING:
         print("Planner returned: %s" % result.plan)

@@ -4,7 +4,6 @@ https://homes.cs.washington.edu/~weld/papers/pi.pdf
 """
 
 import random
-import logging
 from enum import Enum
 from typing import List, Dict, Tuple, FrozenSet, Any
 from dataclasses import dataclass
@@ -12,15 +11,14 @@ from dataclasses import dataclass
 from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect
 
-from ucpop.search import best_first_search, depth_first_search
-from ucpop.classes import PlanStep, Link, BasePlan as Plan
+from ucpop.search import best_first_search
+from ucpop.classes import PlanStep, Link, Plan
 from ucpop.utils import initial_values_to_conjuncts
 
-logger = logging.getLogger(__name__)
 
 
 @dataclass(eq=True, frozen=True)
-class POPSearchNode:
+class UCPOPSearchNode:
     plan: Plan
     agenda: FrozenSet[FNode]
     threats: FrozenSet[Tuple[PlanStep, Link]]
@@ -32,8 +30,6 @@ class POPSearchNode:
     def with_new_step(self, action: Action, q: FNode, a_need: PlanStep):
         new_plan, a_add, new_link = self.plan.with_new_step(action, q, a_need)
         new_agenda = self.agenda - {(q, a_need)} | set([(pc, a_add) for pc in a_add.preconditions])
-
-        # logger.info(f"Making node with new step: {a_add}\n and new link: {new_link}")
 
         # test all steps in new plan to identify which threaten the new link
         threats_to_new_link = []
@@ -49,8 +45,6 @@ class POPSearchNode:
 
         added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
-
-        logger.info(f"Making plan using new action {action.name} with id {a_add.id}")
         return POPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
@@ -64,8 +58,6 @@ class POPSearchNode:
                 threats_to_new_link.append((step, new_link))
 
         new_threats = self.threats.union(threats_to_new_link)
-
-        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id}")
         return POPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_new_constraint(self, first_id: int, second_id: int):
@@ -180,10 +172,8 @@ class POP:
         def pop_daughters_fn(node):
             # step 2
             flaw, flaw_type = self._get_flaw(node)
-            logger.info(f"Addressing {flaw_type} {flaw}")
             # step 3
             daughter_nodes = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
-            logger.info(f"Num Daughters = {len(daughter_nodes)}")
             return daughter_nodes
 
         def pop_rank_fn(node):
