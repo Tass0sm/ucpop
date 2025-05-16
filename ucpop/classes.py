@@ -224,6 +224,36 @@ class Plan:
 
         return True
 
+    def to_partial_order_plan(self):
+        id_to_instance_map = {}
+
+        for step in self.steps:
+            if step.id in [0, -1]:
+                continue
+            id_to_instance_map[step.id] = ActionInstance(step.action)
+
+        graph = defaultdict(list)
+        # Build the directed graph
+        for u, vs in self.adj_list.items():
+            for v in vs:
+                if u in [0, -1] and v in [0, -1] or u == v:
+                    continue
+                elif u in [0, -1]:
+                    v_inst = id_to_instance_map[v]
+                    graph[v_inst] = graph[v_inst]
+                elif v in [0, -1]:
+                    u_inst = id_to_instance_map[u]
+                    graph[u_inst] = graph[u_inst]
+                else:
+                    u_inst = id_to_instance_map[u]
+                    v_inst = id_to_instance_map[v]
+                    graph[u_inst].append(v_inst)
+
+        return up.plans.PartialOrderPlan(graph)
+
+    # def __repr__(self):
+    #     return f"{self.__class__.__name__}(adj_list={self.adj_list})"
+
     # def add_link(self, step_p, condition, step_c):
     #     l = Link(step_p, condition, step_c)
     #     self.links.append(l)

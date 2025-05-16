@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect
 
-from ucpop.search import best_first_search
+from ucpop.search import best_first_search, depth_first_search
 from ucpop.classes import PlanStep, Link, Plan
 from ucpop.utils import initial_values_to_conjuncts
 

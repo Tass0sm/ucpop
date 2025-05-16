@@ -50,3 +50,50 @@ def best_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
 
     print("Search Terminated")
     return None
+
+
+def depth_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
+    """perform depth first search starting from the initial state in the graph
+    induced by initial_state and daughters_fn, terminating according to goal_p,
+    and ranking nodes to explore first according to rank_fn. limit is a positive
+    limit on the depth the search is allowed to reach before terminating.
+    """
+
+    # stack for plans to explore
+    search_stack = [initial_state]
+    search_queue_set = set([initial_state])
+
+    # set for plans already explored
+    closed_set = set()
+
+    # continue while there are still nodes to search and the limit hasn't been
+    # exhausted.
+    while search_stack and limit > 0:
+
+        # get the next best node to explore
+        current = search_stack.pop()
+        search_queue_set -= {current}
+
+        # if its the goal, end the search and return it
+        if goal_p(current):
+            return current
+
+        # otherwise mark it as having been explored
+        closed_set.add(current)
+
+        # get all the children from the current plan and compute their ranks
+        ranked_children = list(map(lambda c: (rank_fn(c), c), daughters_fn(current)))
+        sorted_children = sorted(ranked_children, key=lambda x: x[0])
+        num_children = len(sorted_children)
+
+        # for each child, add it to the queue as long as we haven't already
+        # explored it or we haven't already added it to the queue
+        for rank, child in ranked_children:
+            if child in closed_set or child in search_queue_set:
+                continue
+            else:
+                search_stack.append(child)
+                search_queue_set |= {child}
+
+    print("Search Terminated")
+    return None
