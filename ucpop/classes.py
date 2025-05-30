@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 class PlanStep:
     """A concrete step in a plan, which is an instance of an action."""
     id: int
-    preconditions: FrozenSet[FNode] = field(default_factory=frozenset)
-    effects: FrozenSet[FNode] = field(default_factory=frozenset)
+    preconditions: frozenset[FNode] = field(default_factory=frozenset)
+    effects: frozenset[FNode] = field(default_factory=frozenset)
     action: Optional[Action] = None
 
     def __repr__(self):
@@ -35,7 +35,7 @@ class Link:
     step_c: PlanStep
 
 
-def add_edges(adj_list: frozendict[int, FrozenSet[int]], new_edges: dict[int, Iterable[int]]):
+def add_edges(adj_list: frozendict[int, frozenset[int]], new_edges: dict[int, Iterable[int]]):
     new_adj_list = adj_list
     for u, new_vs in new_edges.items():
         old_vs = new_adj_list.get(u, frozenset())
@@ -45,9 +45,9 @@ def add_edges(adj_list: frozendict[int, FrozenSet[int]], new_edges: dict[int, It
 
 @dataclass(eq=True, frozen=True, kw_only=True)
 class BasePlan:
-    steps: FrozenSet[PlanStep]                # List of steps in the plan.
-    adj_list: frozendict[int, int]            # Adjacency list of step ids
-    links: FrozenSet[Link]                    # List of causal links.
+    steps: frozenset[PlanStep]                # List of steps in the plan.
+    adj_list: frozendict[int, frozenset[int]] # Adjacency list of step ids
+    links: frozenset[Link]                    # List of causal links.
     highest_id: int = 0
 
     # transitive_closure: FrozenDict[int, int]  # Transitive closure of this graph.
