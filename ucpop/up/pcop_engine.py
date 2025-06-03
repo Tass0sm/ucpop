@@ -9,9 +9,9 @@ from functools import reduce
 import unified_planning as up
 from unified_planning import engines
 from unified_planning.engines import PlanGenerationResultStatus
-from unified_planning.model import Parameter
-from unified_planning.plans import ActionInstance
+from unified_planning.model import Parameter, Variable
 
+from ucpop.up.partial_action_plans import PartialActionInstance
 from ucpop.variable import Var
 from ucpop.pcop import PCOP
 
@@ -24,9 +24,6 @@ class PCOPEngineImpl(up.engines.Engine,
         # Read known user-options and store them for using in the `solve` method
         up.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
-
-        # self.max_tries = options.get('max_tries', None)
-        # self.restart_probability = options.get('restart_probability', 0.00001)
 
     @property
     def name(self) -> str:
@@ -59,20 +56,22 @@ class PCOPEngineImpl(up.engines.Engine,
             if step.id in [0, -1]:
                 continue
 
-            def get_grounding(p: Parameter):
+            def get_grounding_or_variable(p: Parameter):
                 v = Var(p.name, p.type, step.id)
                 result = plan.bindings.get_grounding_or_variable(v)
-                assert not isinstance(result, Var), f"{v} isn't grounded"
-                return result
+                if isinstance(result, Var):
+                    return Variable(result.name + str(result.num), result.type)
+                else:
+                    return result
 
-            params = tuple(map(get_grounding, step.action.parameters))
-            action_instance = ActionInstance(step.action, params)
+            params = tuple(map(get_grounding_or_variable, step.action.parameters))
+            action_instance = PartialActionInstance(step.action, params)
             id_to_instance_map[step.id] = action_instance
             graph[action_instance] = []
 
         # Build the directed graph
         for u, vs in plan.adj_list.items():
-            for v in vs:
+            for v, condition in vs:
                 if u in [0, -1] or v in [0, -1] or u == v:
                     continue
                 u_inst = id_to_instance_map[u]
