@@ -13,9 +13,9 @@ from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect, Object
 
 from ucpop.search import best_first_search
-from ucpop.classes import PlanStep, Link, PartialActionPlan as Plan
+from ucpop.classes import PlanStep, Link, PartialConditionalActionPlan as Plan
 from ucpop.utils import initial_values_to_conjuncts
-from ucpop.variable import Var, Bindings, Unifier, most_general_unification
+from ucpop.variable import Var, DisjunctiveBindings as Bindings, Unifier, most_general_unification
 
 logger = logging.getLogger(__name__)
 
@@ -39,14 +39,14 @@ class PCOPSearchNode:
         # test all steps in new plan to identify which threaten the new link
         threats_to_new_link = []
         for step in new_plan.steps:
-            if new_plan.threatens(step, new_link):
-                threats_to_new_link.append((step, new_link))
+            if (threat_conditions := new_plan.threatens(step, new_link)) is not None:
+                threats_to_new_link.append((step, new_link, threat_conditions))
 
         # test all links in new plan to identify which are threatened by the new step
         threats_from_new_step = []
         for link in new_plan.links:
-            if new_plan.threatens(a_add, link):
-                threats_from_new_step.append((a_add, link))
+            if (threat_conditions := new_plan.threatens(a_add, link)) is not None:
+                threats_from_new_step.append((a_add, link, threat_conditions))
 
         added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
@@ -54,39 +54,31 @@ class PCOPSearchNode:
         logger.info(f"Making plan using new action {action.name} with id {a_add.id}")
         return PCOPSearchNode(new_plan, new_agenda, new_threats)
 
-    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, unifier: Unifier):
-        new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, unifier)
+    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
+        new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, all_unifiers)
         new_agenda = self.agenda - {(q, a_need)}
 
         # test all steps in new plan to identify which threaten the new link
         threats_to_new_link = []
         for step in new_plan.steps:
-            if new_plan.threatens(step, new_link):
-                threats_to_new_link.append((step, new_link))
+            if (threat_conditions := new_plan.threatens(step, new_link)) is not None:
+                threats_to_new_link.append((step, new_link, threat_conditions))
 
         new_threats = self.threats.union(threats_to_new_link)
 
         logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id}")
         return PCOPSearchNode(new_plan, new_agenda, new_threats)
 
-    def with_new_binding(self, var: Var, obj: Object):
-        new_plan = self.plan.with_new_binding(var, obj)
-        new_agenda = self.agenda
-
-        # there can be a faster way to test for new threats, but this is the
-        # simplest version for now.
-        new_threats_from_binding = []
-        for step in new_plan.steps:
-            for link in new_plan.links:
-                if new_plan.threatens(step, link):
-                    new_threats_from_binding.append((step, link))
-
-        new_threats = self.threats.union(new_threats_from_binding)
-        return PCOPSearchNode(new_plan, new_agenda, new_threats)
-
-    def with_new_constraint(self, first_id: int, second_id: int):
-        new_plan = self.plan.with_new_constraint(first_id, second_id)
-        return PCOPSearchNode(new_plan, self.agenda, self.threats)
+    def with_new_constraint(
+            self,
+            first_id: int,
+            second_id: int,
+            edge_conditions: frozenset[Unifier],
+            addressed_threat
+    ):
+        new_plan = self.plan.with_new_constraint(first_id, second_id, edge_conditions)
+        new_threats = self.threats - {addressed_threat}
+        return PCOPSearchNode(new_plan, self.agenda, new_threats)
 
     def __le__(self, other):
         """Compare the size of self.plan to other.plan"""
@@ -102,7 +94,6 @@ class PCOPSearchNode:
 class PCOPFlawType(Enum):
     THREAT = 0
     OPENCOND = 1
-    UNBOUND_VAR = 2
 
 
 class PCOP:
@@ -135,24 +126,22 @@ class PCOP:
             return next(iter(node.threats)), PCOPFlawType.THREAT
         elif node.agenda:
             return next(iter(node.agenda)), PCOPFlawType.OPENCOND
-        elif node.plan.bindings.unbound:
-            return next(iter(node.plan.bindings.unbound)), PCOPFlawType.UNBOUND_VAR
         else:
             return None, None
 
     def _get_daughter_nodes_for_threat(self, node: PCOPSearchNode, flaw):
         """This corresponds to the causal link protection step in the POP
         non-deterministic pseudocode"""
-        a_t, link = flaw
+        a_t, link, threat_conditions = flaw
         demotion_c = node.plan.can_demote(a_t, link)
         promotion_c = node.plan.can_promote(a_t, link)
         if demotion_c and promotion_c:
-            return [node.with_new_constraint(*demotion_c),
-                    node.with_new_constraint(*promotion_c)]
+            return [node.with_new_constraint(*demotion_c, threat_conditions, flaw),
+                    node.with_new_constraint(*promotion_c, threat_conditions, flaw)]
         elif demotion_c:
-            return [node.with_new_constraint(*demotion_c)]
+            return [node.with_new_constraint(*demotion_c, threat_conditions, flaw)]
         elif promotion_c:
-            return [node.with_new_constraint(*promotion_c)]
+            return [node.with_new_constraint(*promotion_c, threat_conditions, flaw)]
         else:
             # Couldn't promote or demote to resolve threat so no daughter plans
             return []
@@ -166,48 +155,33 @@ class PCOP:
         def action_could_work(action):
             # iterate over effects to find one that unifies with goal
             unifications = filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, node.plan.highest_id + 1, node.plan.bindings), action.effects))
-            # return that unification if found
-            return next(unifications, None)
+            all_possible_unifiers = list(unifications)
+            return all_possible_unifiers
 
-        def plan_with_new_step_from(action, unifier):
-            return node.with_new_step(action, q, a_need, unifier)
+        def plan_with_new_step_from(action, all_unifiers):
+            return node.with_new_step(action, q, a_need, all_unifiers)
 
         # possible plans when a_add is a newly instantiated step
-        new_step_plans = [plan_with_new_step_from(action, unifier) for action in self.problem.actions if (unifier := action_could_work(action)) is not None]
+        new_step_plans = [plan_with_new_step_from(action, all_unifiers) for action in self.problem.actions if len(all_unifiers := action_could_work(action)) > 0]
 
-        def plan_with_reused_step_from(step, unifier):
-            return node.with_reused_step(step, q, a_need, unifier)
+        def plan_with_reused_step_from(step, all_unifiers):
+            return node.with_reused_step(step, q, a_need, all_unifiers)
 
         logger.info(f"Getting reusable steps for ({q}, {q_step_id}) under {node.plan.bindings}")
 
         # possible plans when a_add is a reused step
-        reused_step_plans = [plan_with_reused_step_from(step, unifier) for step, unifier in node.plan.reusable_steps(q, a_need)]
+        reused_step_plans = [plan_with_reused_step_from(step, all_unifiers) for step, all_unifiers in node.plan.reusable_steps(q, a_need)]
 
         # all possible plans derived from all possible choices of a_add
         daughter_plans = new_step_plans + reused_step_plans
         return daughter_plans
 
 
-    def _get_daughter_nodes_for_unbound_var(self, node: PCOPSearchNode, flaw):
-        """Generate nodes resolving unbound variable."""
-        unbound_var = flaw
-        objects = self.problem.objects(unbound_var.type)
-
-        def can_unify(o):
-            r, _ = node.plan.bindings.can_unify(o, unbound_var)
-            return r
-
-        objects = filter(can_unify, objects)
-
-        return [node.with_new_binding(unbound_var, o) for o in objects]
-
     def _get_daughter_nodes_for_flaw(self, node: PCOPSearchNode, flaw_type: PCOPFlawType, flaw):
         if flaw_type == PCOPFlawType.THREAT:
             return self._get_daughter_nodes_for_threat(node, flaw)
         elif flaw_type == PCOPFlawType.OPENCOND:
             return self._get_daughter_nodes_for_opencond(node, flaw)
-        elif flaw_type == PCOPFlawType.UNBOUND_VAR:
-            return self._get_daughter_nodes_for_unbound_var(node, flaw)
         else:
             return []
 
@@ -217,7 +191,7 @@ class PCOP:
 
         # step 1
         def pop_goal_p(node):
-            return len(node.agenda) == 0 and len(node.threats) == 0 and len(node.plan.bindings.unbound) == 0
+            return len(node.agenda) == 0 and len(node.threats) == 0
 
         def pop_daughters_fn(node):
             # step 2

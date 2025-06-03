@@ -11,7 +11,14 @@ from unified_planning.model import FNode, Action, Object
 from unified_planning.plans import ActionInstance
 
 from ucpop.utils import effects_to_conjuncts
-from ucpop.variable import Var, Bindings, Unifier, most_general_unification
+from ucpop.variable import (
+    Var,
+    Bindings,
+    DisjunctiveBindings,
+    Unifier,
+    DisjunctiveUnifier,
+    most_general_unification
+)
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +266,7 @@ class BasePlan:
 
 @dataclass(eq=True, frozen=True, kw_only=True)
 class PartialActionPlan(BasePlan):
-    bindings: Bindings
+    bindings: DisjunctiveBindings
 
     @staticmethod
     def _separate_preconditions(preconditions, step_id):
@@ -353,3 +360,156 @@ class PartialActionPlan(BasePlan):
                 return True
 
         return False
+
+
+@dataclass(eq=True, frozen=True, kw_only=True)
+class PartialConditionalActionPlan(PartialActionPlan):
+    adj_list: frozendict[int, frozenset[tuple[int, Unifier]]]            # Adjacency list of step ids
+    bindings: Bindings
+
+    # @staticmethod
+    # def _separate_preconditions(preconditions, step_id):
+    #     def get_binding(precond):
+    #         if precond.is_equals():
+    #             x, y = precond.args
+    #             x = x.parameter()
+    #             y = y.parameter()
+    #             return (Var(x.name, x.type, step_id), Var(y.name, y.type, step_id), True)
+    #         elif (precond.is_not() and (~precond).is_equals()):
+    #             x, y = (~precond).args
+    #             x = x.parameter()
+    #             y = y.parameter()
+    #             return (Var(x.name, x.type, step_id), Var(y.name, y.type, step_id), False)
+    #         else:
+    #             return None
+
+    #     binding_preconds = []
+    #     logical_preconds = []
+    #     for pc in preconditions:
+    #         if (bc := get_binding(pc)):
+    #             binding_preconds.append(bc)
+    #         else:
+    #             logical_preconds.append(pc)
+
+    #     return binding_preconds, logical_preconds
+
+    @staticmethod
+    def _separate_unifiers(unifiers: list[Unifier]) -> tuple[Unifier, DisjunctiveUnifier]:
+        unifications = {}
+
+        n_unifiers = len(unifiers)
+        for u_i, unifier in enumerate(unifiers):
+            for x, y, eq in unifier:
+                assert eq, "_seperate_unifiers can only separate codesignation constraints"
+
+                # if this unifier is binding a variable (x or y) to something record that
+                if isinstance(x, Var):
+                    if x in unifications:
+                        unifications[x].append((u_i, y))
+                    else:
+                        unifications[x] = [(u_i, y)]
+                if isinstance(y, Var):
+                    if y in unifications:
+                        unifications[y].append((u_i, x))
+                    else:
+                        unifications[y] = [(u_i, x)]
+
+        constraints = []
+        disjunctive_constraints = []
+
+        # if in every unifier, a variable was ALYWAYS set to a single value add a binding constraint
+
+        # if a variable was set to multiple values or a single value SOMETIMES
+        # across unifiers, add a disjunctive binding constraint
+
+        for var, bindings in unifications.items():
+            is_binding = True
+            _, c0 = bindings[0]
+            cs = set()
+            for i, (u_i, c) in enumerate(bindings):
+                if u_i != i or c != c0:
+                    is_binding = False
+                cs.add(c)
+
+            if is_binding:
+                constraints.append((var, c0, True))
+            else:
+                disjunctive_constraints.append((var, cs))
+
+        return constraints, disjunctive_constraints
+
+
+    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
+        new_id = self.highest_id + 1
+        binding_preconds, logical_preconds = PartialActionPlan._separate_preconditions(action.preconditions, new_id)
+        effect_conjuncts = effects_to_conjuncts(action.effects)
+        a_add = PlanStep(new_id, frozenset(logical_preconds), effect_conjuncts, action)
+        new_link = Link(a_add, q, a_need)
+
+        new_steps = self.steps.union({a_add})
+        new_adj_list = add_edges(self.adj_list, { 0: [(a_add.id, ())], a_add.id: [(a_need.id, ()), (-1, ())] })
+        new_links = self.links.union({new_link})
+
+        assert len(all_unifiers) > 0, "with_new_step must be called with some unifiers that allow using the step"
+        new_constraints, new_disjunctive_constraints = PartialConditionalActionPlan._separate_unifiers(all_unifiers)
+
+        new_bindings = self.bindings.union(new_variables=[Var(p.name, p.type, new_id) for p in action.parameters],
+                                           new_constraints=new_constraints + binding_preconds,
+                                           new_disjunctive_constraints=new_disjunctive_constraints)
+
+        return (PartialConditionalActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=a_add.id),
+                a_add,
+                new_link,
+                logical_preconds)
+
+    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
+        new_link = Link(a_add, q, a_need)
+
+        new_steps = self.steps
+        new_adj_list = add_edges(self.adj_list, { a_add.id: [(a_need.id, ())] })
+        new_links = self.links.union({new_link})
+        
+        assert len(all_unifiers) > 0, "with_reused_step must be called with some unifiers that allow using the step"
+        new_constraints, new_disjunctive_constraints = PartialConditionalActionPlan._separate_unifiers(all_unifiers)
+        new_bindings = self.bindings.union(new_constraints=new_constraints,
+                                           new_disjunctive_constraints=new_disjunctive_constraints)
+
+        return PartialConditionalActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=self.highest_id), new_link
+
+    def with_new_constraint(self, first_id: int, second_id: int, edge_conditions: frozenset[Unifier]):
+        new_adj_list = add_edges(self.adj_list, { first_id: [(second_id, edge_conditions)] })
+        return PartialConditionalActionPlan(steps=self.steps, adj_list=new_adj_list, links=self.links, bindings=self.bindings, highest_id=self.highest_id)
+
+    def with_new_binding(self, var: Var, obj: Object):
+        new_steps = self.steps
+        new_adj_list = self.adj_list
+        new_links = self.links
+        new_bindings = self.bindings.union(new_constraints=[(var, obj, True)])
+        return PartialConditionalActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=self.highest_id)
+
+    def reusable_steps(self, q: FNode, a_need: PlanStep):
+        q_step_id = a_need.id
+
+        def step_could_work(step):
+            unifications = filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, step.id, self.bindings), step.effects))
+            all_possible_unifiers = list(unifications)
+            if self.possibly_before(step, a_need) and len(all_possible_unifiers) > 0:
+                return step, all_possible_unifiers
+            else:
+                return False
+
+        reusable_steps = list(filter(None, map(step_could_work, self.steps)))
+        logger.info(f"len(reusable_steps) = {len(reusable_steps)}")
+        return reusable_steps
+
+    def threatens(self, step: PlanStep, link: Link):
+        if not self.possibly_between(step, link.step_p, link.step_c):
+            return None
+        
+        unifiers = set()
+        for effect in step.effects:
+            unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
+            if unifier is not None:
+                unifiers.add(frozenset(unifier))
+                
+        return frozenset(unifiers) or None

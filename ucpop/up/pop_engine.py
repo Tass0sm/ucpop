@@ -22,9 +22,6 @@ class POPEngineImpl(up.engines.Engine,
         up.engines.Engine.__init__(self)
         up.engines.mixins.OneshotPlannerMixin.__init__(self)
 
-        # self.max_tries = options.get('max_tries', None)
-        # self.restart_probability = options.get('restart_probability', 0.00001)
-
     @property
     def name(self) -> str:
         return "POP"
