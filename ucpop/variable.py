@@ -30,9 +30,10 @@ class BindingNode:
 
 Symbol = Union[Var, FNode]
 Unifier = list[tuple[Symbol, Symbol, bool]]
+DisjunctiveUnifier = list[tuple[Symbol, list[Symbol]]]
 
 
-@dataclass(eq=True, frozen=True)
+@dataclass(eq=True, frozen=True, kw_only=True)
 class Bindings:
     nodes: frozendict[Symbol, BindingNode]
     # the set of representative variables that are unbound
@@ -74,7 +75,7 @@ class Bindings:
             else:
                 Bindings._add_noncodesignation(mutable_nodes, mutable_unbound, x, y)
 
-        return Bindings(frozendict(mutable_nodes), frozenset(mutable_unbound), self.size + len(new_constraints))
+        return Bindings(nodes=frozendict(mutable_nodes), unbound=frozenset(mutable_unbound), size=self.size + len(new_constraints))
 
     @staticmethod
     def _find(nodes: dict, x: Symbol) -> Symbol:
@@ -188,18 +189,159 @@ class Bindings:
         nodes[rx] = rep_x.update(noncodesignation=rep_x.noncodesignation | {ry})
         nodes[ry] = rep_y.update(noncodesignation=rep_y.noncodesignation | {rx})
 
-    # @staticmethod
-    # def from_terms(terms: Set[str], constants: Set[str] = set()) -> "ConstraintState":
-    #     nodes = {
-    #         t: NodeState(
-    #             parent=t,
-    #             constant=t if t in constants else None,
-    #             noncodesignation=frozenset(),
-    #             rank=0
-    #         )
-    #         for t in terms
-    #     }
-    #     return ConstraintState(frozendict(nodes))
+
+@dataclass(eq=True, frozen=True)
+class DisjunctiveBindings(Bindings):
+    pending_disjunctions: frozendict[Symbol, frozenset[Symbol]]
+
+    @classmethod
+    def empty(cls):
+        return DisjunctiveBindings(nodes=frozendict(), pending_disjunctions=frozenset(), unbound=frozenset(), size=0)
+
+    def union(
+            self,
+            new_variables: list[Var] = [],
+            new_constraints: Unifier = [],
+            new_disjunctive_constraints: DisjunctiveUnifier = []
+    ) -> "DisjunctiveBindings":
+        mutable_nodes = dict(self.nodes)
+
+        # Add new variables
+        for var in new_variables:
+            assert isinstance(var, Var), "new_variables argument must only contain variables"
+            mutable_nodes[var] = Bindings._make_node(var)
+
+        # The new variables
+        mutable_unbound = set(self.unbound) | set(new_variables)
+
+        # the new disjunctive_constraints
+        mutable_pending_disjunctions = dict(self.pending_disjunctions)
+
+        for x, y, eq in new_constraints:
+            if eq:
+                DisjunctiveBindings._add_codesignation(mutable_nodes, mutable_pending_disjunctions, mutable_unbound, x, y)
+            else:
+                DisjunctiveBindings._add_noncodesignation(mutable_nodes, mutable_pending_disjunctions, mutable_unbound, x, y)
+
+        for x, ys in new_disjunctive_constraints:
+            DisjunctiveBindings._add_disjunctive_codesignation(mutable_nodes, mutable_pending_disjunctions, mutable_unbound, x, ys)
+
+        return DisjunctiveBindings(nodes=frozendict(mutable_nodes),
+                                   pending_disjunctions=frozendict(mutable_pending_disjunctions),
+                                   unbound=frozenset(mutable_unbound),
+                                   size=self.size + len(new_constraints))
+
+    @staticmethod
+    def _add_disjunctive_codesignation(nodes: dict, pending_disjunctions: dict, unbound: set, x: Symbol, ys: list[Symbol]) -> Optional["Bindings"]:
+        rx, rep_x = Bindings._get_repr(nodes, x)
+
+        rys = []
+        for y in ys:
+            ry, rep_y = Bindings._get_repr(nodes, y)
+
+            if rx == ry:
+                # if x is already bound to one of these specific ys, don't add
+                # the disjunctive constraint as it is just confusing from the
+                # simplest version of the constraints.
+                return
+            if (rep_x.constant and rep_y.constant and
+                rep_x.constant != rep_y.constant):
+                raise "InvalidBindings"
+            if rx in rep_y.noncodesignation or ry in rep_x.noncodesignation:
+                raise "InvalidBindings"
+
+            rys.append(ry)
+
+        if rx in pending_disjunctions:
+            pending_disjunctions[rx] = pending_disjunctions[rx] | rys
+        else:
+            pending_disjunctions[rx] = frozenset(rys)
+
+    @staticmethod
+    def _add_codesignation(nodes: dict, pending_disjunctions: dict, unbound: set, x: Symbol, y: Symbol) -> Optional["Bindings"]:
+        """Should only be used when x and y can be made to codesignate."""
+        rx, rep_x = Bindings._get_repr(nodes, x)
+        ry, rep_y = Bindings._get_repr(nodes, y)
+
+        if rx == ry:
+            return nodes
+        if (rep_x.constant and rep_y.constant and
+            rep_x.constant != rep_y.constant):
+            # TODO: Maybe return error
+            return None
+        if rx in rep_y.noncodesignation or ry in rep_x.noncodesignation:
+            # TODO: Maybe return error
+            return None
+
+        # Choose new root
+        if rep_x.rank > rep_y.rank:
+            new_root, child = rx, ry
+            root_node, child_node = rep_x, rep_y
+        else:
+            new_root, child = ry, rx
+            root_node, child_node = rep_y, rep_x
+
+        # Merge noncodesignation sets
+        new_ncd = rep_x.noncodesignation | rep_y.noncodesignation
+        new_const = root_node.constant or child_node.constant
+
+        # remove the old child and parent items from the unbound set because
+        # they will both be replaced.
+        unbound.discard(child)
+        unbound.discard(new_root)
+
+        # Update child node
+        nodes[child] = child_node.update(parent=new_root,
+                                         constant=new_const,
+                                         noncodesignation=new_ncd)
+
+        # Update root node
+        new_rank = max(rep_x.rank, rep_y.rank) + int(rep_x.rank == rep_y.rank)
+        nodes[new_root] = root_node.update(parent=new_root,
+                                           constant=new_const,
+                                           noncodesignation=new_ncd,
+                                           rank=new_rank)
+
+        # if new const is None, then new_root should be a Var
+        if new_const is None:
+            # double check just in case, though
+            assert isinstance(new_root, Var), "Trying to add a constant to the unbound set."
+            unbound |= {new_root}
+
+
+        # Update all former noncodesignation refs to point to new root
+        # consider the situation:
+        # x y z w
+        # and constraints ((neq y w)) meaning y.ncd = {w} and w.ncd = {y}
+        # without this step and with unioning (x, y) and (z, w)
+        # x-y z-w with x.ncd = {w}, y.ncd = {w}, z.ncd={y}, and w.ncd={y}
+        # then union on x and z would check if x is in z.ncd and if z is in x.ncd and find (False or False)
+        # then x-(y, z-w) with x.ncd = {w, y} but they are all codesignated so this would be inconsistent.
+        # so this is necessary.
+        # that would make:
+        # - union(x, y) update w.ncd to contain just the representative for y (x)
+        # - union(z, w) update y.ncd to contain just the representative for w (z)
+        for other in new_ncd:
+            other_node = nodes[other]
+            nodes[other] = other_node.update(noncodesignation=((other_node.noncodesignation - {rx, ry}) | {new_root}))
+
+        # cleanup pending disjunctions
+        # breakpoint()
+        # del pending_disjunctions[rx]
+        # del pending_disjunctions[ry]
+
+
+    @staticmethod
+    def _add_noncodesignation(nodes: dict, pending_disjunctions: dict, unbound: set, x: Symbol, y: Symbol) -> Optional["Bindings"]:
+        """Should only be used when x and y can be made to codesignate."""
+        rx, rep_x = Bindings._get_repr(nodes, x)
+        ry, rep_y = Bindings._get_repr(nodes, y)
+
+        if rx == ry:
+            return None
+
+        nodes[rx] = rep_x.update(noncodesignation=rep_x.noncodesignation | {ry})
+        nodes[ry] = rep_y.update(noncodesignation=rep_y.noncodesignation | {rx})
 
 
 def most_general_unification(q: FNode, q_step_id: int, r: Union[FNode, Effect], r_step_id: int, bindings: Bindings = {}) -> Optional[Unifier]:
