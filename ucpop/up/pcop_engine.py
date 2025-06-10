@@ -11,7 +11,7 @@ from unified_planning import engines
 from unified_planning.engines import PlanGenerationResultStatus
 from unified_planning.model import Parameter, Variable
 
-from ucpop.up.partial_action_plans import PartialActionInstance
+from ucpop.up.partial_action_plans import PartialActionInstance, PartialActionPartialOrderPlan
 from ucpop.variable import Var
 from ucpop.pcop import PCOP
 
@@ -48,35 +48,56 @@ class PCOPEngineImpl(up.engines.Engine,
     def supports(problem_kind):
         return problem_kind <= PCOPEngineImpl.supported_kind()
 
-    def _action_adjacency_list_from_plan(self, plan):
+    def _action_adjacency_dicts_from_plan(self, plan):
         id_to_instance_map = {}
         graph = {}
+
+        def get_grounding_or_variable(v: Var):
+            result = plan.bindings.get_grounding_or_variable(v)
+            if isinstance(result, Var):
+                return Variable(result.name + str(result.num), result.type)
+            else:
+                return result
 
         for step in plan.steps:
             if step.id in [0, -1]:
                 continue
 
-            def get_grounding_or_variable(p: Parameter):
+            def get_grounding_or_variable_from_parameter(p: Parameter):
                 v = Var(p.name, p.type, step.id)
-                result = plan.bindings.get_grounding_or_variable(v)
-                if isinstance(result, Var):
-                    return Variable(result.name + str(result.num), result.type)
-                else:
-                    return result
+                return get_grounding_or_variable(v)
 
-            params = tuple(map(get_grounding_or_variable, step.action.parameters))
+            params = tuple(map(get_grounding_or_variable_from_parameter, step.action.parameters))
             action_instance = PartialActionInstance(step.action, params)
             id_to_instance_map[step.id] = action_instance
-            graph[action_instance] = []
+            graph[action_instance] = {}
+
+        def convert_condition(c):
+            condition = []
+            for sub in c:
+                clause = []
+                for x_var, y_var, eq in sub:
+                    x = get_grounding_or_variable(x_var)
+                    y = get_grounding_or_variable(y_var)
+                    if eq:
+                        clause.append(x.Equals(y))
+                    else:
+                        clause.append(~x.Equals(y))
+                clause = reduce(lambda a, b: a & b, clause)
+                condition.append(clause)
+            return reduce(lambda a, b: a | b, condition)
+
 
         # Build the directed graph
         for u, vs in plan.adj_list.items():
-            for v, condition in vs:
+            for v, cond in vs:
                 if u in [0, -1] or v in [0, -1] or u == v:
                     continue
                 u_inst = id_to_instance_map[u]
                 v_inst = id_to_instance_map[v]
-                graph[u_inst].append(v_inst)
+
+                cond = convert_condition(cond)
+                graph[u_inst][v_inst] = {"condition": cond}
 
         return graph
 
@@ -92,9 +113,9 @@ class PCOPEngineImpl(up.engines.Engine,
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
-            action_adjacency_list = self._action_adjacency_list_from_plan(plan)
+            action_adjacency_dicts = self._action_adjacency_dicts_from_plan(plan)
             return up.engines.PlanGenerationResult(
-                status, up.plans.PartialOrderPlan(action_adjacency_list),
+                status, PartialActionPartialOrderPlan(action_adjacency_dicts),
                 self.name, metrics={}
             )
         else:
