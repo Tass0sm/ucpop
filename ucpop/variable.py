@@ -37,10 +37,11 @@ class Bindings:
     nodes: frozendict[Symbol, BindingNode]
     # the set of representative variables that are unbound
     unbound: frozenset[Var]
+    size: int
 
     @classmethod
     def empty(cls):
-        return Bindings(nodes=frozendict(), unbound=frozenset())
+        return Bindings(nodes=frozendict(), unbound=frozenset(), size=0)
 
     def find(self, x: Symbol) -> Symbol:
         return Bindings._find(self.nodes, x)
@@ -73,7 +74,7 @@ class Bindings:
             else:
                 Bindings._add_noncodesignation(mutable_nodes, mutable_unbound, x, y)
 
-        return Bindings(frozendict(mutable_nodes), frozenset(mutable_unbound))
+        return Bindings(frozendict(mutable_nodes), frozenset(mutable_unbound), self.size + len(new_constraints))
 
     @staticmethod
     def _find(nodes: dict, x: Symbol) -> Symbol:
