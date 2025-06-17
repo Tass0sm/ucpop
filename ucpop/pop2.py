@@ -6,11 +6,11 @@ https://homes.cs.washington.edu/~weld/papers/pi.pdf
 import logging
 from enum import Enum
 from itertools import chain
-from typing import List, Dict, Tuple, Collection, FrozenSet, Any
+from typing import Tuple, FrozenSet, Any
 from dataclasses import dataclass
 
 from frozendict import frozendict
-from unified_planning.model import FNode, Problem, Action, Effect, Object
+from unified_planning.model import FNode, Problem, Action, Object
 
 from ucpop.search import best_first_search
 from ucpop.classes import PlanStep, Link, PartialActionPlan as Plan

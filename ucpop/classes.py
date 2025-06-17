@@ -2,12 +2,12 @@ import logging
 from dataclasses import dataclass, field
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Any, Optional, Union, Collection, FrozenSet
+from typing import Optional, FrozenSet
 
 from frozendict import frozendict
 
 import unified_planning as up
-from unified_planning.model import OperatorKind, FNode, Action, Object
+from unified_planning.model import FNode, Action, Object
 from unified_planning.plans import ActionInstance
 
 from ucpop.utils import effects_to_conjuncts

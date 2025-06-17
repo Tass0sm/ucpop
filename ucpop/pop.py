@@ -3,16 +3,15 @@ https://homes.cs.washington.edu/~weld/papers/pi.pdf
 
 """
 
-import random
 import logging
 from enum import Enum
-from typing import List, Dict, Tuple, FrozenSet, Any
+from typing import Tuple, FrozenSet, Any
 from dataclasses import dataclass
 
 from frozendict import frozendict
-from unified_planning.model import FNode, Problem, Action, Effect
+from unified_planning.model import FNode, Problem, Action
 
-from ucpop.search import best_first_search, depth_first_search
+from ucpop.search import best_first_search
 from ucpop.classes import PlanStep, Link, BasePlan as Plan
 from ucpop.utils import initial_values_to_conjuncts
 

@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from frozendict import frozendict
-from typing import Optional, FrozenSet, Union, Tuple, Optional
+from typing import FrozenSet, Union, Tuple, Optional
 
-from unified_planning.model import OperatorKind, Object, Effect, FNode, Parameter, Type
+from unified_planning.model import OperatorKind, Effect, FNode, Type
 
 from ucpop.utils import effect_to_conjunct
 
@@ -226,8 +226,6 @@ def most_general_unification(q: FNode, q_step_id: int, r: Union[FNode, Effect], 
 
 def unify_args(q_args: tuple[FNode, ...], q_step_id: int, r_args: tuple[FNode, ...], r_step_id: int, bindings) -> Optional[Unifier]:
     result = []
-    a1 = []
-    a2 = []
 
     for x, y in zip(q_args, r_args):
 
