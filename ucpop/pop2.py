@@ -36,19 +36,15 @@ class POP2SearchNode:
         # add logical preconditions to agenda
         new_agenda = self.agenda - {(q, a_need)} | set([(pc, a_add) for pc in logical_preconds])
 
-        # test all steps in new plan to identify which threaten the new link
-        threats_to_new_link = []
-        for step in new_plan.steps:
-            if new_plan.threatens(step, new_link):
-                threats_to_new_link.append((step, new_link))
-
-        # test all links in new plan to identify which are threatened by the new step
-        threats_from_new_step = []
+        # test all links in new plan with all steps in new plan to identify any new threats due to the new binding
+        # O(N^3)
+        # TODO: See if this can still be computed incrementally in this case
+        added_threats = []
         for link in new_plan.links:
-            if new_plan.threatens(a_add, link):
-                threats_from_new_step.append((a_add, link))
+            for step in new_plan.steps:
+                if new_plan.threatens(step, link):
+                    added_threats.append((step, link))
 
-        added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
 
         logger.info(f"Making plan using new action {action.name} with id {a_add.id} and unifier {unifier}")
@@ -58,13 +54,16 @@ class POP2SearchNode:
         new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, unifier)
         new_agenda = self.agenda - {(q, a_need)}
 
-        # test all steps in new plan to identify which threaten the new link
-        threats_to_new_link = []
-        for step in new_plan.steps:
-            if new_plan.threatens(step, new_link):
-                threats_to_new_link.append((step, new_link))
+        # test all links in new plan with all steps in new plan to identify any new threats due to the new binding
+        # O(N^3)
+        # TODO: See if this can still be computed incrementally in this case
+        added_threats = []
+        for link in new_plan.links:
+            for step in new_plan.steps:
+                if new_plan.threatens(step, link):
+                    added_threats.append((step, link))
 
-        new_threats = self.threats.union(threats_to_new_link)
+        new_threats = self.threats.union(added_threats)
 
         logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} and unifier {unifier}")
         return POP2SearchNode(new_plan, new_agenda, new_threats)
