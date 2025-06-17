@@ -332,9 +332,9 @@ class PartialActionPlan(BasePlan):
         q_step_id = a_need.id
 
         def step_could_work(step):            
-            unifications = filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, step.id, self.bindings), step.effects))
-            if self.possibly_before(step, a_need) and (unifier := next(unifications, None)) is not None:
-                return step, unifier
+            unifiers = list(filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, step.id, self.bindings), step.effects)))
+            if self.possibly_before(step, a_need) and len(unifiers) > 0:
+                return step, unifiers
             else:
                 return False
 

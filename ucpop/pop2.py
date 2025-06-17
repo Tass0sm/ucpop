@@ -3,9 +3,9 @@ https://homes.cs.washington.edu/~weld/papers/pi.pdf
 
 """
 
-import random
 import logging
 from enum import Enum
+from itertools import chain
 from typing import List, Dict, Tuple, Collection, FrozenSet, Any
 from dataclasses import dataclass
 
@@ -51,7 +51,7 @@ class POP2SearchNode:
         added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
 
-        logger.info(f"Making plan using new action {action.name} with id {a_add.id}")
+        logger.info(f"Making plan using new action {action.name} with id {a_add.id} and unifier {unifier}")
         return POP2SearchNode(new_plan, new_agenda, new_threats)
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, unifier: Unifier):
@@ -66,7 +66,7 @@ class POP2SearchNode:
 
         new_threats = self.threats.union(threats_to_new_link)
 
-        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id}")
+        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} and unifier {unifier}")
         return POP2SearchNode(new_plan, new_agenda, new_threats)
 
     def with_new_binding(self, var: Var, obj: Object):
@@ -165,23 +165,33 @@ class POP2:
 
         def action_could_work(action):
             # iterate over effects to find one that unifies with goal
-            unifications = filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, node.plan.highest_id + 1, node.plan.bindings), action.effects))
-            # return that unification if found
-            return next(unifications, None)
+            unifications = filter(lambda x: x is not None,
+                                  map(lambda e: most_general_unification(q, q_step_id, e,
+                                                                         node.plan.highest_id + 1,
+                                                                         node.plan.bindings),
+                                      action.effects))
 
-        def plan_with_new_step_from(action, unifier):
-            return node.with_new_step(action, q, a_need, unifier)
+            # return that unification if found
+            return list(unifications)
+
+        def plans_with_new_step_from(action, unifiers):
+            return [node.with_new_step(action, q, a_need, unifier) for unifier in unifiers]
 
         # possible plans when a_add is a newly instantiated step
-        new_step_plans = [plan_with_new_step_from(action, unifier) for action in self.problem.actions if (unifier := action_could_work(action)) is not None]
+        new_step_plans = list(chain.from_iterable(
+            [plans_with_new_step_from(action, unifiers)
+             for action in self.problem.actions
+             if len(unifiers := action_could_work(action)) > 0]))
 
-        def plan_with_reused_step_from(step, unifier):
-            return node.with_reused_step(step, q, a_need, unifier)
+        def plans_with_reused_step_from(step, unifiers):
+            return [node.with_reused_step(step, q, a_need, unifier) for unifier in unifiers]
 
         logger.info(f"Getting reusable steps for ({q}, {q_step_id}) under {node.plan.bindings}")
 
         # possible plans when a_add is a reused step
-        reused_step_plans = [plan_with_reused_step_from(step, unifier) for step, unifier in node.plan.reusable_steps(q, a_need)]
+        reused_step_plans = list(chain.from_iterable(
+            [plans_with_reused_step_from(step, unifiers)
+             for step, unifiers in node.plan.reusable_steps(q, a_need)]))
 
         # all possible plans derived from all possible choices of a_add
         daughter_plans = new_step_plans + reused_step_plans
