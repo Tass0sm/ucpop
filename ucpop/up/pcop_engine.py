@@ -83,9 +83,15 @@ class PCOPEngineImpl(up.engines.Engine,
                         clause.append(x.Equals(y))
                     else:
                         clause.append(~x.Equals(y))
-                clause = reduce(lambda a, b: a & b, clause)
-                condition.append(clause)
-            return reduce(lambda a, b: a | b, condition)
+
+                if clause:
+                    clause = reduce(lambda a, b: a & b, clause)
+                    condition.append(clause)
+
+            if condition:
+                return reduce(lambda a, b: a | b, condition)
+            else:
+                return True
 
 
         # Build the directed graph
