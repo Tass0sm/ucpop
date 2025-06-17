@@ -73,7 +73,7 @@ class BasePlan:
 
     def with_new_constraint(self, first_id: int, second_id: int):
         new_adj_list = add_edges(self.adj_list, { first_id: [second_id] })
-        return BasePlan(self.steps, new_adj_list, self.links, self.highest_id)
+        return BasePlan(steps=self.steps, adj_list=new_adj_list, links=self.links, highest_id=self.highest_id)
 
     def threatens(self, step: PlanStep, link: Link):
         # TODO: add stuff for identifying if step is not already correctly ordered
@@ -85,10 +85,6 @@ class BasePlan:
         inconsistent. TODO: change this class to be a graph anyway.
         """
 
-        # if edge already exists or its a self-loop
-        if v in self.adj_list[u] or (u == v):
-            return (u, v)
-
         if u == 0:
             return True # the start node can always be before another
         if v == -1:
@@ -97,6 +93,10 @@ class BasePlan:
             return False # the end node can never be before another
         if v == 0:
             return False # the start node can never be after another
+
+        # if edge already exists or its a self-loop
+        if v in self.adj_list[u] or (u == v):
+            return (u, v)
 
         # current graph with additional edge
         graph = add_edges(self.adj_list, { u: [v] })
@@ -177,12 +177,12 @@ class BasePlan:
             return False # if step is not in the graph anywhere, consider it to
                          # not be part of the partial order
 
-        stack = [step]
+        stack = [step.id]
         visited = set()
         while stack:
             current = stack.pop()
 
-            if current == other:
+            if current == other.id:
                 return False
 
             visited |= {current}
@@ -213,12 +213,12 @@ class BasePlan:
             return False # if step is not in the graph anywhere, consider it to
                          # not be part of the partial order
 
-        stack = [other]
+        stack = [other.id]
         visited = set()
         while stack:
             current = stack.pop()
 
-            if current == step:
+            if current == step.id:
                 return False
 
             visited |= {current}
