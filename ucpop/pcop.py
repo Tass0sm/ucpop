@@ -5,6 +5,7 @@ https://homes.cs.washington.edu/~weld/papers/pi.pdf
 
 import random
 import logging
+import itertools
 from enum import Enum
 from typing import List, Dict, Tuple, Collection, FrozenSet, Any
 from dataclasses import dataclass
@@ -30,43 +31,42 @@ class PCOPSearchNode:
     # lazily resolved during search, as opposed to eagerly resolved during the
     # generation of daughter plans from agenda items
 
-    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, unifier: Unifier):
-        new_plan, a_add, new_link, logical_preconds = self.plan.with_new_step(action, q, a_need, unifier)
+    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
+        new_plan, a_add, new_link, logical_preconds = self.plan.with_new_step(action, q, a_need, all_unifiers)
 
         # add logical preconditions to agenda
         new_agenda = self.agenda - {(q, a_need)} | set([(pc, a_add) for pc in logical_preconds])
 
-        # test all steps in new plan to identify which threaten the new link
-        threats_to_new_link = []
-        for step in new_plan.steps:
-            if (threat_conditions := new_plan.threatens(step, new_link)) is not None:
-                threats_to_new_link.append((step, new_link, threat_conditions))
-
-        # test all links in new plan to identify which are threatened by the new step
-        threats_from_new_step = []
+        # test all links in new plan with all steps in new plan to identify any new threats due to the new binding
+        # O(N^3)
+        # TODO: See if this can still be computed incrementally in this case
+        added_threats = []
         for link in new_plan.links:
-            if (threat_conditions := new_plan.threatens(a_add, link)) is not None:
-                threats_from_new_step.append((a_add, link, threat_conditions))
+            for step in new_plan.steps:
+                if (threat_conditions := new_plan.threatens(step, link)) is not None:
+                    added_threats.append((step, link, threat_conditions))
 
-        added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
 
-        logger.info(f"Making plan using new action {action.name} with id {a_add.id}")
+        logger.info(f"Making plan using new action {action.name} with id {a_add.id} and unifiers {all_unifiers}")
         return PCOPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
         new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, all_unifiers)
         new_agenda = self.agenda - {(q, a_need)}
 
-        # test all steps in new plan to identify which threaten the new link
-        threats_to_new_link = []
-        for step in new_plan.steps:
-            if (threat_conditions := new_plan.threatens(step, new_link)) is not None:
-                threats_to_new_link.append((step, new_link, threat_conditions))
+        # test all links in new plan with all steps in new plan to identify any new threats due to the new binding
+        # O(N^3)
+        # TODO: See if this can still be computed incrementally in this case
+        added_threats = []
+        for link in new_plan.links:
+            for step in new_plan.steps:
+                if (threat_conditions := new_plan.threatens(step, link)) is not None:
+                    added_threats.append((step, link, threat_conditions))
 
-        new_threats = self.threats.union(threats_to_new_link)
+        new_threats = self.threats.union(added_threats)
 
-        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id}")
+        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} under unifiers {all_unifiers}")
         return PCOPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_new_constraint(
@@ -78,6 +78,25 @@ class PCOPSearchNode:
     ):
         new_plan = self.plan.with_new_constraint(first_id, second_id, edge_conditions)
         new_threats = self.threats - {addressed_threat}
+        return PCOPSearchNode(new_plan, self.agenda, new_threats)
+
+    def with_new_bindings(
+            self,
+            unifier: Unifier,
+            addressed_threat: any
+    ):
+        new_plan = self.plan.with_new_bindings(unifier)
+
+        # test all links in new plan with all steps in new plan to identify any threats
+        # O(N^3)
+        # TODO: See if this can still be computed incrementally in this case
+        new_threats = []
+        for link in new_plan.links:
+            for step in new_plan.steps:
+                if (threat_conditions := new_plan.threatens(step, link)) is not None:
+                    new_threats.append((step, link, threat_conditions))
+        new_threats = frozenset(new_threats)
+
         return PCOPSearchNode(new_plan, self.agenda, new_threats)
 
     def __le__(self, other):
@@ -133,18 +152,28 @@ class PCOP:
         """This corresponds to the causal link protection step in the POP
         non-deterministic pseudocode"""
         a_t, link, threat_conditions = flaw
-        demotion_c = node.plan.can_demote(a_t, link)
-        promotion_c = node.plan.can_promote(a_t, link)
-        if demotion_c and promotion_c:
-            return [node.with_new_constraint(*demotion_c, threat_conditions, flaw),
-                    node.with_new_constraint(*promotion_c, threat_conditions, flaw)]
-        elif demotion_c:
-            return [node.with_new_constraint(*demotion_c, threat_conditions, flaw)]
-        elif promotion_c:
-            return [node.with_new_constraint(*promotion_c, threat_conditions, flaw)]
-        else:
-            # Couldn't promote or demote to resolve threat so no daughter plans
-            return []
+
+        new_nodes = []
+
+        if demotion_c := node.plan.can_demote(a_t, link):
+            logger.info("Making plan with demotion")
+            new_nodes.append(node.with_new_constraint(*demotion_c, threat_conditions, flaw))
+
+        if promotion_c := node.plan.can_promote(a_t, link):
+            logger.info("Making plan with promotion")
+            new_nodes.append(node.with_new_constraint(*promotion_c, threat_conditions, flaw))
+
+        # threat conditions is a disjunction of conjunctions. if any clause is
+        # true, A_T will threaten LINK. So one only needs to ensure that one
+        # requirement from each clause is unsatisfied. If there are N clauses
+        # each with M items and you choose to only make disunification per
+        # clause, there are M^N possible descendant nodes for an accomodation.
+
+        for requirements in itertools.product(*threat_conditions):
+            if unifier := node.plan.can_accommodate(a_t, link, requirements):
+                new_nodes.append(node.with_new_bindings(unifier, flaw))
+
+        return new_nodes
 
     def _get_daughter_nodes_for_opencond(self, node: PCOPSearchNode, flaw):
         """This corresponds to the action selection step in the POP
@@ -154,9 +183,14 @@ class PCOP:
 
         def action_could_work(action):
             # iterate over effects to find one that unifies with goal
-            unifications = filter(lambda x: x is not None, map(lambda e: most_general_unification(q, q_step_id, e, node.plan.highest_id + 1, node.plan.bindings), action.effects))
-            all_possible_unifiers = list(unifications)
-            return all_possible_unifiers
+            unifications = filter(lambda x: x is not None,
+                                  map(lambda e: most_general_unification(q, q_step_id, e,
+                                                                         node.plan.highest_id + 1,
+                                                                         node.plan.bindings),
+                                      action.effects))
+
+            # return that unification if found
+            return list(unifications)
 
         def plan_with_new_step_from(action, all_unifiers):
             return node.with_new_step(action, q, a_need, all_unifiers)
@@ -201,10 +235,11 @@ class PCOP:
             daughter_nodes = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
             # logger.info(f"Threats: {current.threats}")
             logger.info(f"Num Daughters = {len(daughter_nodes)}")
+
             return daughter_nodes
 
         def pop_rank_fn(node):
-            return len(node.plan.steps) + len(node.agenda) + len(node.threats)
+            return len(node.plan.steps) + len(node.agenda) + len(node.threats) + node.plan.bindings.size
 
         node = self._create_initial_node()
         goal_node = best_first_search(node,

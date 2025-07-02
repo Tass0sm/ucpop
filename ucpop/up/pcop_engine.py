@@ -51,11 +51,15 @@ class PCOPEngineImpl(up.engines.Engine,
     def _action_adjacency_dicts_from_plan(self, plan):
         id_to_instance_map = {}
         graph = {}
+        relevant_variables = {}
 
         def get_grounding_or_variable(v: Var):
+            nonlocal relevant_variables
             result = plan.bindings.get_grounding_or_variable(v)
             if isinstance(result, Var):
-                return Variable(result.name + str(result.num), result.type)
+                up_var = Variable(result.name + str(result.num), result.type)
+                relevant_variables[result] = up_var
+                return up_var
             else:
                 return result
 
@@ -93,7 +97,6 @@ class PCOPEngineImpl(up.engines.Engine,
             else:
                 return True
 
-
         # Build the directed graph
         for u, vs in plan.adj_list.items():
             for v, cond in vs:
@@ -105,7 +108,15 @@ class PCOPEngineImpl(up.engines.Engine,
                 cond = convert_condition(cond)
                 graph[u_inst][v_inst] = {"condition": cond}
 
-        return graph
+        # For each relevant variable, get the constants that can be bound to
+        # them
+
+        relevant_variables_bindings = {}
+        for var, up_var in relevant_variables.items():
+            assert var in plan.bindings.pending_disjunctions
+            relevant_variables_bindings[up_var] = list(plan.bindings.pending_disjunctions[var])
+
+        return graph, relevant_variables_bindings
 
     def _solve(
             self,
@@ -119,9 +130,9 @@ class PCOPEngineImpl(up.engines.Engine,
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
-            action_adjacency_dicts = self._action_adjacency_dicts_from_plan(plan)
+            action_adjacency_dicts, relevant_variable_bindings = self._action_adjacency_dicts_from_plan(plan)
             return up.engines.PlanGenerationResult(
-                status, PartialActionPartialOrderPlan(action_adjacency_dicts),
+                status, PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings),
                 self.name, metrics={}
             )
         else:

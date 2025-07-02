@@ -12,12 +12,13 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
     """Represents a partial order plan. Actions are represent as an adjacency list graph."""
 
     def __init__(
-        self,
-        adjacency_dicts: dict[
-            "PartialActionInstance", dict["PartialActionInstance", dict[str, any]]
-        ],
-        environment: Optional["Environment"] = None,
-        _graph: Optional[nx.DiGraph] = None,
+            self,
+            adjacency_dicts: dict[
+                "PartialActionInstance", dict["PartialActionInstance", dict[str, any]]
+            ],
+            relevant_variable_bindings: dict[any, list[any]],
+            environment: Optional["Environment"] = None,
+            _graph: Optional[nx.DiGraph] = None,
     ):
         """
         Constructs the PartialActionPartialOrderPlan using the labeled adjacency list representation.
@@ -28,6 +29,9 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
             NOTE: This parameter is for internal use only and it's maintainance is not guaranteed by any means.
         :return: The created PartialOrderPlan.
         """
+
+        self._relevant_variable_bindings = relevant_variable_bindings
+
         # if we have a specific environment or we don't have any actions
         if environment is not None or not adjacency_dicts:
             plans.plan.Plan.__init__(
@@ -100,6 +104,15 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
                 ((act, adj_dict) for act, adj_dict in adj_dicts.items() if adj_dict),
             )
         )
+
+        ret.append("  bindings:")
+
+        def print_bindings(var_bindings):
+            var, bindings = var_bindings
+            bindings_str = ", ".join(map(str, bindings))
+            return f"    {var}: {bindings_str}"
+
+        ret.extend(map(print_bindings, self._relevant_variable_bindings.items()))
 
         return "\n".join(ret)
 
