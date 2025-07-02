@@ -58,6 +58,9 @@ class Bindings:
     def can_unify(self, x: Symbol, y: Symbol) -> Optional[Unifier]:
         return self._can_unify(self.nodes, x, y)
 
+    def can_divorce(self, x: Symbol, y: Symbol) -> Optional[Unifier]:
+        return self._can_divorce(self.nodes, x, y)
+
     def union(self, new_variables: list[Var] = [], new_constraints: Unifier = []) -> "Bindings":
         mutable_nodes = dict(self.nodes)
 
@@ -103,6 +106,20 @@ class Bindings:
         if rx in rep_y.noncodesignation or ry in rep_x.noncodesignation:
             return False, None
         return True, [(x, y, True)]
+
+    @staticmethod
+    def _can_divorce(nodes: dict, x: Symbol, y: Symbol) -> Optional[Unifier]:
+        rx, rep_x = Bindings._get_repr(nodes, x)
+        ry, rep_y = Bindings._get_repr(nodes, y)
+
+        if rx == ry:
+            return False, None
+        if (rep_x.constant and rep_y.constant and
+                rep_x.constant != rep_y.constant):
+            return True, []
+        if rx in rep_y.noncodesignation or ry in rep_x.noncodesignation:
+            return True, []
+        return True, [(x, y, False)]
 
     @staticmethod
     def _make_node(x: Symbol):
@@ -253,7 +270,7 @@ class DisjunctiveBindings(Bindings):
             rys.append(ry)
 
         if rx in pending_disjunctions:
-            pending_disjunctions[rx] = pending_disjunctions[rx] | rys
+            pending_disjunctions[rx] = pending_disjunctions[rx] | frozenset(rys)
         else:
             pending_disjunctions[rx] = frozenset(rys)
 
