@@ -123,27 +123,27 @@ class BasePlan:
                 continue
 
             stack = [node.id]
-            stack_set = set([node.id]) # set for fast membership test
+            gray_set = set()
 
             while stack:
                 current = stack[-1]
                 # contains both gray (in stack) and black nodes (popped from stack)
                 visited |= {current}
+                gray_set |= {current}
 
                 # only pop when fully explored to keep everything in the stack
                 has_white_child = False
                 for child in graph.get(current, []):
-                    if child in stack_set:
+                    if child in gray_set:
                         # if edge reaches back into stack, there is a cycle
                         return None
                     if child not in visited:
                         has_white_child = True
                         stack.append(child)
-                        stack_set |= {child}
 
                 if not has_white_child:
                     stack.pop()
-                    stack_set -= {current}
+                    gray_set -= {current}
 
         # No cycle, still consistent
         return (u, v)
@@ -575,27 +575,27 @@ class PartialConditionalActionPlan(PartialActionPlan):
                 continue
 
             stack = [node.id]
-            stack_set = set([node.id]) # set for fast membership test
+            gray_set = set()
 
             while stack:
                 current = stack[-1]
                 # contains both gray (in stack) and black nodes (popped from stack)
                 visited |= {current}
+                gray_set |= {current}
 
                 # only pop when fully explored to keep everything in the stack
                 has_white_child = False
                 for child, _ in graph.get(current, []):
-                    if child in stack_set:
+                    if child in gray_set:
                         # if edge reaches back into stack, there is a cycle
                         return None
                     if child not in visited:
                         has_white_child = True
                         stack.append(child)
-                        stack_set |= {child}
 
                 if not has_white_child:
                     stack.pop()
-                    stack_set -= {current}
+                    gray_set -= {current}
 
         # No cycle, still consistent
         return (u, v)
