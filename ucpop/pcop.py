@@ -8,10 +8,12 @@ import logging
 import itertools
 from enum import Enum
 from typing import List, Dict, Tuple, Collection, FrozenSet, Any
+from functools import reduce
 from dataclasses import dataclass
 
 from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect, Object
+from unified_planning.shortcuts import Exists, Forall
 
 from ucpop.search import best_first_search
 from ucpop.classes import PlanStep, Link, PartialConditionalActionPlan as Plan
@@ -99,6 +101,9 @@ class PCOPSearchNode:
 
         return PCOPSearchNode(new_plan, self.agenda, new_threats)
 
+    def with_new_agenda(self, new_agenda):
+        return PCOPSearchNode(self.plan, new_agenda, self.threats)
+
     def __le__(self, other):
         """Compare the size of self.plan to other.plan"""
         return (len(self.plan.steps) + len(self.agenda) + len(self.threats)) <= \
@@ -113,6 +118,8 @@ class PCOPSearchNode:
 class PCOPFlawType(Enum):
     THREAT = 0
     OPENCOND = 1
+    UNIVERSAL_GOAL = 2
+    CONJUNCTION_GOAL = 3
 
 
 class PCOP:
@@ -138,13 +145,33 @@ class PCOP:
 
         return PCOPSearchNode(plan, agenda, threats)
 
+    def _compute_universal_base(self, q: FNode) -> FNode:
+        # first, take out of outer not
+        if q.is_not() and (~q).is_exists():
+            variable = (~q).variables()[0]
+            clause = ~(~q).arg(0)
+            q = Forall(clause, variable)
+
+        if q.is_forall():
+            clauses = [clause.substitute({variable: obj}) for obj in self.problem.objects(variable.type)]
+            q = reduce(lambda x, y: x & y, clauses).simplify()
+
+        return q
+
     def _get_flaw(self, node: PCOPSearchNode) -> Tuple[Any, PCOPFlawType]:
         """This corresponds to the goal selection step in the POP
         non-deterministic pseudocode"""
         if node.threats:
             return next(iter(node.threats)), PCOPFlawType.THREAT
         elif node.agenda:
-            return next(iter(node.agenda)), PCOPFlawType.OPENCOND
+            q, a_c = next(iter(node.agenda))
+
+            if (~q).is_exists() or q.is_exists() or (~q).is_forall() or q.is_forall():
+                return (q, a_c), PCOPFlawType.UNIVERSAL_GOAL
+            elif q.is_and():
+                return (q, a_c), PCOPFlawType.CONJUNCTION_GOAL
+            else:
+                return (q, a_c), PCOPFlawType.OPENCOND
         else:
             return None, None
 
@@ -210,12 +237,30 @@ class PCOP:
         daughter_plans = new_step_plans + reused_step_plans
         return daughter_plans
 
+    def _get_daughter_nodes_for_universal_goal(self, node: PCOPSearchNode, flaw):
+        """This function is a workaround for the complicated step 2 in UCPOP,
+        which resolves a universal goal from the agenda."""
+        q, a_need = flaw
+        q_base = self._compute_universal_base(q)
+        new_agenda = node.agenda - {(q, a_need)} | {(q_base, a_need)}
+        return [node.with_new_agenda(new_agenda)]
+
+    def _get_daughter_nodes_for_conjunction_goal(self, node: PCOPSearchNode, flaw):
+        """This function is a workaround for the complicated step 2 in UCPOP,
+        which resolves a conjunction goal from the agenda."""
+        q, a_need = flaw
+        new_agenda = node.agenda - {(q, a_need)} | set([(arg, a_need) for arg in q.args])
+        return [node.with_new_agenda(new_agenda)]
 
     def _get_daughter_nodes_for_flaw(self, node: PCOPSearchNode, flaw_type: PCOPFlawType, flaw):
         if flaw_type == PCOPFlawType.THREAT:
             return self._get_daughter_nodes_for_threat(node, flaw)
         elif flaw_type == PCOPFlawType.OPENCOND:
             return self._get_daughter_nodes_for_opencond(node, flaw)
+        elif flaw_type == PCOPFlawType.UNIVERSAL_GOAL:
+            return self._get_daughter_nodes_for_universal_goal(node, flaw)
+        elif flaw_type == PCOPFlawType.CONJUNCTION_GOAL:
+            return self._get_daughter_nodes_for_conjunction_goal(node, flaw)
         else:
             return []
 
