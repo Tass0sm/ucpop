@@ -511,6 +511,20 @@ class PartialConditionalActionPlan(PartialActionPlan):
         logger.info(f"len(reusable_steps) = {len(reusable_steps)}")
         return reusable_steps
 
+    def dfs_steps(self, step: PlanStep):
+        stack = [step]
+        visited_steps = set()
+        visited = set()
+        while stack:
+            current = stack.pop()
+            visited_steps |= {current}
+            visited |= {current.id}
+
+            for child, _ in self.adj_list.get(current.id, []):
+                if child not in visited:
+                    stack.append(self.steps[child])
+        return visited_steps
+
     def threatens(self, step: PlanStep, link: Link):
         if not self.possibly_between(step, link.step_p, link.step_c):
             return None
@@ -518,6 +532,18 @@ class PartialConditionalActionPlan(PartialActionPlan):
         unifiers = set()
         for effect in step.effects:
             unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
+            if unifier is not None:
+                unifiers.add(frozenset(unifier))
+
+        return frozenset(unifiers) or None
+
+    def redeems(self, step: PlanStep, link: Link):
+        if not self.possibly_between(step, link.step_p, link.step_c):
+            return None
+
+        unifiers = set()
+        for effect in step.effects:
+            unifier = most_general_unification(link.condition, link.step_c.id, effect, step.id, self.bindings)
             if unifier is not None:
                 unifiers.add(frozenset(unifier))
 

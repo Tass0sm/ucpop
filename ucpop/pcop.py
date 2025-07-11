@@ -82,6 +82,17 @@ class PCOPSearchNode:
         new_threats = self.threats - {addressed_threat}
         return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {first_id}->{second_id} under {edge_conditions} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
 
+    def with_redemption(
+            self,
+            first_id: int,
+            second_id: int,
+            edge_conditions: frozenset[Unifier],
+            addressed_threat
+    ):
+        new_plan = self.plan.with_new_constraint(first_id, second_id, edge_conditions)
+        new_threats = self.threats - {addressed_threat}
+        return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {first_id}->{second_id} under {edge_conditions} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
+
     def with_new_bindings(
             self,
             unifier: Unifier,
@@ -189,6 +200,24 @@ class PCOP:
         if promotion_c := node.plan.can_promote(a_t, link):
             logger.info("Making plan with promotion")
             new_nodes.append(node.with_new_constraint(*promotion_c, threat_conditions, flaw))
+
+        # apart from demotion and promotion, we want to also consider potential
+        # "redeemer" actions that are already ordered with respect to a_t, and
+        # then promote or demote those in order to resolve the threat. For now
+        # this is done when demotion and promotion are impossible. That is, when
+        # a_t is guaranteed to be between a_p and a_c. I think this should stay,
+        # but I could be wrong. An alternative would require a change to the
+        # whole notion of links. This may require further thought in a follow-up
+        # paper. Right now its not the goal.
+
+        if not demotion_c and not promotion_c:
+            for a_r in node.plan.dfs_steps(a_t) - {a_t.id}:
+                if node.plan.redeems(a_r, link) and (new_edge := node.plan.can_constrain(a_r.id, link.step_c.id)):
+                    # in effect, this is now replacing conditionally replacing
+                    # the threatened causal link. Not sure if this is the best
+                    # form of this algorithm but it at least works in some
+                    # scenarios. Will try to prove correctness.
+                    new_nodes.append(node.with_redemption(*new_edge, threat_conditions, flaw))
 
         # threat conditions is a disjunction of conjunctions. if any clause is
         # true, A_T will threaten LINK. So one only needs to ensure that one
