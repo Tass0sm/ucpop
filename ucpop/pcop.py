@@ -287,10 +287,17 @@ class PCOP:
             return len(node.plan.steps) + len(node.agenda) + len(node.threats) + node.plan.bindings.size
 
         node = self._create_initial_node()
-        goal_node = best_first_search(node,
-                                      pop_daughters_fn,
-                                      pop_goal_p,
-                                      pop_rank_fn,
-                                      search_limit)
+        goal_node, search_tree = best_first_search(node,
+                                                   pcop_daughters_fn,
+                                                   pcop_goal_p,
+                                                   pcop_rank_fn,
+                                                   search_limit)
 
-        return goal_node.plan if goal_node else None
+        head = goal_node
+        search_path = [goal_node]
+        while head in search_tree:
+            head, extras = search_tree[head]
+            search_path.append((head, extras))
+        search_path = list(reversed(search_path))
+
+        return (goal_node.plan, search_path) if goal_node else (None, None)

@@ -86,7 +86,7 @@ class POP2EngineImpl(up.engines.Engine,
             output_stream: Optional[IO[str]] = None
     ) -> 'up.engines.PlanGenerationResult':
 
-        plan = POP2(problem).execute()
+        plan, _ = POP2(problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING

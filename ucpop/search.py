@@ -18,6 +18,9 @@ def best_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
     search_queue = [(0, initial_state)]
     search_queue_set = set([initial_state])
 
+    # tree recording parent relationships
+    search_tree = {}
+
     # set for plans already explored
     closed_set = set()
 
@@ -38,13 +41,18 @@ def best_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
 
         # if its the goal, end the search and return it
         if goal_p(current):
-            return current
+            return current, search_tree
 
         # otherwise mark it as having been explored
         closed_set.add(current)
 
         # get all the children from the current plan and compute their ranks
-        ranked_children = list(map(lambda c: (rank_fn(c), c), daughters_fn(current)))
+        daughters_and_extras, common_extras = daughters_fn(current)
+        if len(daughters_and_extras) == 0:
+            daughters, extras = [], []
+        else:
+            daughters, extras = list(zip(*daughters_and_extras))
+        ranked_children = list(map(lambda c, es: (rank_fn(c), c, es), daughters, extras))
         num_children = len(ranked_children)
 
         # decrement limit by the number of children found here
@@ -52,15 +60,16 @@ def best_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):
 
         # for each child, add it to the queue as long as we haven't already
         # explored it or we haven't already added it to the queue
-        for rank, child in ranked_children:
+        for rank, child, extras in ranked_children:
             if child in closed_set or child in search_queue_set:
                 continue
             else:
+                search_tree[child] = (current, extras | common_extras)
                 heapq.heappush(search_queue, (rank, child))
                 search_queue_set |= {child}
 
     print("Search Terminated")
-    return None
+    return None, search_tree
 
 
 def depth_first_search(initial_state, daughters_fn, goal_p, rank_fn, limit):

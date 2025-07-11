@@ -126,7 +126,7 @@ class PCOPEngineImpl(up.engines.Engine,
             output_stream: Optional[IO[str]] = None
     ) -> 'up.engines.PlanGenerationResult':
 
-        plan = PCOP(problem).execute()
+        plan, search_path = PCOP(problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING

@@ -80,7 +80,7 @@ class POPEngineImpl(up.engines.Engine,
             grounding_result = grounder.compile(problem, up.engines.CompilationKind.GROUNDING)
         grounded_problem = grounding_result.problem
 
-        plan = POP(grounded_problem).execute()
+        plan, _ = POP(grounded_problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING

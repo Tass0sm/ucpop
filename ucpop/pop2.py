@@ -288,10 +288,17 @@ class POP2:
             return len(node.plan.steps) + len(node.agenda) + len(node.threats)
 
         node = self._create_initial_node()
-        goal_node = best_first_search(node,
-                                      pop_daughters_fn,
-                                      pop_goal_p,
-                                      pop_rank_fn,
-                                      search_limit)
+        goal_node, search_tree = best_first_search(node,
+                                                   pop_daughters_fn,
+                                                   pop_goal_p,
+                                                   pop_rank_fn,
+                                                   search_limit)
 
-        return goal_node.plan if goal_node else None
+        head = goal_node
+        search_path = [goal_node]
+        while head in search_tree:
+            head = search_tree[head]
+            search_path.append(head)
+        search_path = list(reversed(search_path))
+
+        return (goal_node.plan, search_path) if goal_node else (None, None)
