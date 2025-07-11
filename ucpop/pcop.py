@@ -44,14 +44,14 @@ class PCOPSearchNode:
         # TODO: See if this can still be computed incrementally in this case
         added_threats = []
         for link in new_plan.links:
-            for step in new_plan.steps:
+            for step in new_plan.steps.values():
                 if (threat_conditions := new_plan.threatens(step, link)) is not None:
                     added_threats.append((step, link, threat_conditions))
 
         new_threats = self.threats.union(added_threats)
 
         logger.info(f"Making plan using new action {action.name} with id {a_add.id} and unifiers {all_unifiers}")
-        return PCOPSearchNode(new_plan, new_agenda, new_threats)
+        return PCOPSearchNode(new_plan, new_agenda, new_threats), { "note": f"adding {a_add} for {q} in {a_need}" }
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
         new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, all_unifiers)
@@ -62,14 +62,14 @@ class PCOPSearchNode:
         # TODO: See if this can still be computed incrementally in this case
         added_threats = []
         for link in new_plan.links:
-            for step in new_plan.steps:
+            for step in new_plan.steps.values():
                 if (threat_conditions := new_plan.threatens(step, link)) is not None:
                     added_threats.append((step, link, threat_conditions))
 
         new_threats = self.threats.union(added_threats)
 
         logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} under unifiers {all_unifiers}")
-        return PCOPSearchNode(new_plan, new_agenda, new_threats)
+        return PCOPSearchNode(new_plan, new_agenda, new_threats), { "note": f"reusing step {a_add} for {q} in {a_need}" }
 
     def with_new_constraint(
             self,
@@ -80,7 +80,7 @@ class PCOPSearchNode:
     ):
         new_plan = self.plan.with_new_constraint(first_id, second_id, edge_conditions)
         new_threats = self.threats - {addressed_threat}
-        return PCOPSearchNode(new_plan, self.agenda, new_threats)
+        return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {first_id}->{second_id} under {edge_conditions} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
 
     def with_new_bindings(
             self,
@@ -94,12 +94,12 @@ class PCOPSearchNode:
         # TODO: See if this can still be computed incrementally in this case
         new_threats = []
         for link in new_plan.links:
-            for step in new_plan.steps:
+            for step in new_plan.steps.values():
                 if (threat_conditions := new_plan.threatens(step, link)) is not None:
                     new_threats.append((step, link, threat_conditions))
         new_threats = frozenset(new_threats)
 
-        return PCOPSearchNode(new_plan, self.agenda, new_threats)
+        return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {unifier} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
 
     def with_new_agenda(self, new_agenda):
         return PCOPSearchNode(self.plan, new_agenda, self.threats)
@@ -132,7 +132,7 @@ class PCOP:
         start_step = PlanStep(id=0, effects=initial_values_to_conjuncts(self.problem.initial_values))
         end_step = PlanStep(id=-1, preconditions=frozenset(self.problem.goals))
 
-        plan = Plan(steps=frozenset([start_step, end_step]),
+        plan = Plan(steps=frozendict({0: start_step, -1: end_step}),
                     adj_list=frozendict({0: frozenset({(-1, ())})}),
                     bindings=Bindings.empty(),
                     links=frozenset())
@@ -243,14 +243,14 @@ class PCOP:
         q, a_need = flaw
         q_base = self._compute_universal_base(q)
         new_agenda = node.agenda - {(q, a_need)} | {(q_base, a_need)}
-        return [node.with_new_agenda(new_agenda)]
+        return [(node.with_new_agenda(new_agenda), { "note": f"replaced {q} with {q_base}" })]
 
     def _get_daughter_nodes_for_conjunction_goal(self, node: PCOPSearchNode, flaw):
         """This function is a workaround for the complicated step 2 in UCPOP,
         which resolves a conjunction goal from the agenda."""
         q, a_need = flaw
         new_agenda = node.agenda - {(q, a_need)} | set([(arg, a_need) for arg in q.args])
-        return [node.with_new_agenda(new_agenda)]
+        return [(node.with_new_agenda(new_agenda), { "note": f"expanded {q}" })]
 
     def _get_daughter_nodes_for_flaw(self, node: PCOPSearchNode, flaw_type: PCOPFlawType, flaw):
         if flaw_type == PCOPFlawType.THREAT:
@@ -277,11 +277,11 @@ class PCOP:
             flaw, flaw_type = self._get_flaw(node)
             logger.info(f"Addressing {flaw_type} {flaw}")
             # step 3
-            daughter_nodes = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
+            daughter_nodes_and_extras = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
             # logger.info(f"Threats: {current.threats}")
-            logger.info(f"Num Daughters = {len(daughter_nodes)}")
+            logger.info(f"Num Daughters = {len(daughter_nodes_and_extras)}")
 
-            return daughter_nodes
+            return daughter_nodes_and_extras, { "flaw_type": flaw_type }
 
         def pop_rank_fn(node):
             return len(node.plan.steps) + len(node.agenda) + len(node.threats) + node.plan.bindings.size

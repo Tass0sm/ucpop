@@ -54,7 +54,7 @@ def add_edges(adj_list: frozendict[int, frozenset[int]], new_edges: dict[int, It
 
 @dataclass(eq=True, frozen=True, kw_only=True)
 class BasePlan:
-    steps: frozenset[PlanStep]                # List of steps in the plan.
+    steps: frozendict[int, PlanStep]                # List of steps in the plan.
     adj_list: frozendict[int, frozenset[int]] # Adjacency list of step ids
     links: frozenset[Link]                    # List of causal links.
     highest_id: int = 0
@@ -448,7 +448,7 @@ class PartialConditionalActionPlan(PartialActionPlan):
         a_add = PlanStep(new_id, frozenset(logical_preconds), effect_conjuncts, action)
         new_link = Link(a_add, q, a_need)
 
-        new_steps = self.steps.union({a_add})
+        new_steps = self.steps | {new_id: a_add}
         new_adj_list = add_edges(self.adj_list, { 0: [(a_add.id, ())], a_add.id: [(a_need.id, ()), (-1, ())] })
         new_links = self.links.union({new_link})
 
@@ -507,7 +507,7 @@ class PartialConditionalActionPlan(PartialActionPlan):
             else:
                 return False
 
-        reusable_steps = list(filter(None, map(step_could_work, self.steps)))
+        reusable_steps = list(filter(None, map(step_could_work, self.steps.values())))
         logger.info(f"len(reusable_steps) = {len(reusable_steps)}")
         return reusable_steps
 
@@ -568,7 +568,7 @@ class PartialConditionalActionPlan(PartialActionPlan):
         # Check for cycles using iterative DFS (without popping until finished
         # in order to identify cycles by checking if a node is in the stack)
         # TODO: consider changing this to just start with step 0
-        for node in self.steps:
+        for node in self.steps.values():
 
             # optimization, skip nodes that have already been DFS-ed
             if node.id in visited:
