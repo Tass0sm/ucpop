@@ -48,7 +48,8 @@ class PCOPEngineImpl(up.engines.Engine,
     def supports(problem_kind):
         return problem_kind <= PCOPEngineImpl.supported_kind()
 
-    def _action_adjacency_dicts_from_plan(self, plan):
+    @staticmethod
+    def _action_adjacency_dicts_from_plan(plan):
         id_to_instance_map = {}
         graph = {}
         relevant_variables = {}
@@ -113,10 +114,22 @@ class PCOPEngineImpl(up.engines.Engine,
 
         relevant_variables_bindings = {}
         for var, up_var in relevant_variables.items():
-            assert var in plan.bindings.pending_disjunctions
-            relevant_variables_bindings[up_var] = list(plan.bindings.pending_disjunctions[var])
+            if var in plan.bindings.pending_disjunctions:
+                relevant_variables_bindings[up_var] = (
+                    list(plan.bindings.pending_disjunctions[var]),
+                    list(plan.bindings.nodes[var].noncodesignation)
+                )
 
         return graph, relevant_variables_bindings
+
+    @staticmethod
+    def _print_plan(
+            i: int,
+            node_i
+    ):
+        action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(node_i.plan)
+        result = PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings)
+        print(result)
 
     def _solve(
             self,
@@ -129,8 +142,19 @@ class PCOPEngineImpl(up.engines.Engine,
         plan, search_path = PCOP(problem).execute()
 
         if plan:
+
+            for i, search_path_link_i in enumerate(search_path):
+                if i != len(search_path) - 1:
+                    node_i, extras_i = search_path_link_i
+                    PCOPEngineImpl._print_plan(i, node_i)
+                    flaw_type = extras_i["flaw_type"]
+                    print(f"Addressed {flaw_type}. ", extras_i["note"])
+                else:
+                    node_i = search_path_link_i
+                    PCOPEngineImpl._print_plan(i, node_i)
+
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
-            action_adjacency_dicts, relevant_variable_bindings = self._action_adjacency_dicts_from_plan(plan)
+            action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(plan)
             return up.engines.PlanGenerationResult(
                 status, PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings),
                 self.name, metrics={}

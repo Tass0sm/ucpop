@@ -108,8 +108,10 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
         ret.append("  bindings:")
 
         def print_bindings(var_bindings):
-            var, bindings = var_bindings
-            bindings_str = ", ".join(map(str, bindings))
+            var, (possible_bindings, invalid_bindings) = var_bindings
+            bindings_str = ", ".join(map(str, possible_bindings))
+            if invalid_bindings:
+                bindings_str += " and can't be " + ", ".join(map(str, invalid_bindings))
             return f"    {var}: {bindings_str}"
 
         ret.extend(map(print_bindings, self._relevant_variable_bindings.items()))
