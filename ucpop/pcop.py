@@ -264,15 +264,15 @@ class PCOP:
         else:
             return []
 
-    def execute(self, search_limit=2000):
+    def execute(self, search_limit=40000):
         """Run the search in plan-space.
         """
 
         # step 1
-        def pop_goal_p(node):
+        def pcop_goal_p(node):
             return len(node.agenda) == 0 and len(node.threats) == 0
 
-        def pop_daughters_fn(node):
+        def pcop_daughters_fn(node):
             # step 2
             flaw, flaw_type = self._get_flaw(node)
             logger.info(f"Addressing {flaw_type} {flaw}")
@@ -283,7 +283,7 @@ class PCOP:
 
             return daughter_nodes_and_extras, { "flaw_type": flaw_type }
 
-        def pop_rank_fn(node):
+        def pcop_rank_fn(node):
             return len(node.plan.steps) + len(node.agenda) + len(node.threats) + node.plan.bindings.size
 
         node = self._create_initial_node()

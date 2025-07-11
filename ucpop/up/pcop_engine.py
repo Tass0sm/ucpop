@@ -63,7 +63,7 @@ class PCOPEngineImpl(up.engines.Engine,
             else:
                 return result
 
-        for step in plan.steps:
+        for step in plan.steps.values():
             if step.id in [0, -1]:
                 continue
 
