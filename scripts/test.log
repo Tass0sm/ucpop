@@ -1,0 +1,7 @@
+2026-04-05 19:46:26,008 - INFO - Exploring: POP2SearchNode(plan=PartialActionPlan(steps=frozenset({PlanStep(none, id=-1), PlanStep(none, id=0)}), adj_list=frozendict.frozendict({0: frozenset({-1})}), links=frozenset(), highest_id=0, bindings=Bindings(nodes=frozendict.frozendict({}), unbound=frozenset(), size=0)), agenda=frozenset({(on(B, A), PlanStep(none, id=-1))}), threats=frozenset())
+2026-04-05 19:46:26,008 - INFO - Threats: frozenset()
+2026-04-05 19:46:26,008 - INFO - Addressing POP2FlawType.OPENCOND (on(B, A), PlanStep(none, id=-1))
+2026-04-05 19:46:26,008 - INFO - Making plan using new action PutDown with id 1 and unifier [(B, Var(name='b', type=Location, num=1), True), (A, Var(name='l', type=Location, num=1), True)]
+2026-04-05 19:46:26,008 - INFO - Getting reusable steps for (on(B, A), -1) under Bindings(nodes=frozendict.frozendict({}), unbound=frozenset(), size=0)
+2026-04-05 19:46:26,008 - INFO - len(reusable_steps) = 0
+2026-04-05 19:46:26,008 - INFO - Num Daughters = 1

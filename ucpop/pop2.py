@@ -280,9 +280,10 @@ class POP2:
             logger.info(f"Addressing {flaw_type} {flaw}")
             # step 3
             daughter_nodes = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
+            daughter_nodes_and_extras = [(child, {}) for child in daughter_nodes]
             # logger.info(f"Threats: {current.threats}")
             logger.info(f"Num Daughters = {len(daughter_nodes)}")
-            return daughter_nodes
+            return daughter_nodes_and_extras, {"flaw_type": flaw_type}
 
         def pop_rank_fn(node):
             return len(node.plan.steps) + len(node.agenda) + len(node.threats)
@@ -297,8 +298,8 @@ class POP2:
         head = goal_node
         search_path = [goal_node]
         while head in search_tree:
-            head = search_tree[head]
-            search_path.append(head)
+            head, extras = search_tree[head]
+            search_path.append((head, extras))
         search_path = list(reversed(search_path))
 
         return (goal_node.plan, search_path) if goal_node else (None, None)
