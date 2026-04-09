@@ -12,7 +12,7 @@ from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect
 
 from ucpop.search import best_first_search
-from ucpop.classes import PlanStep, Link, Plan
+from ucpop.classes import PlanStep, Link, BasePlan as Plan
 from ucpop.utils import initial_values_to_conjuncts
 
 
@@ -45,7 +45,7 @@ class UCPOPSearchNode:
 
         added_threats = threats_to_new_link + threats_from_new_step
         new_threats = self.threats.union(added_threats)
-        return POPSearchNode(new_plan, new_agenda, new_threats)
+        return UCPOPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
         new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need)
@@ -58,11 +58,11 @@ class UCPOPSearchNode:
                 threats_to_new_link.append((step, new_link))
 
         new_threats = self.threats.union(threats_to_new_link)
-        return POPSearchNode(new_plan, new_agenda, new_threats)
+        return UCPOPSearchNode(new_plan, new_agenda, new_threats)
 
     def with_new_constraint(self, first_id: int, second_id: int):
         new_plan = self.plan.with_new_constraint(first_id, second_id)
-        return POPSearchNode(new_plan, self.agenda, self.threats)
+        return UCPOPSearchNode(new_plan, self.agenda, self.threats)
 
     def __le__(self, other):
         """Compare the size of self.plan to other.plan"""
@@ -85,13 +85,16 @@ class POP:
     def __init__(self, problem: Problem):
         self.problem = problem
 
-    def _create_initial_node(self) -> POPSearchNode:
+    def _create_initial_node(self) -> UCPOPSearchNode:
         # Plan
         start_step = PlanStep(id=0, effects=initial_values_to_conjuncts(self.problem.initial_values))
         end_step = PlanStep(id=-1, preconditions=frozenset(self.problem.goals))
-        plan = Plan(steps=frozenset([start_step, end_step]),
-                    adj_list=frozendict({0: frozenset({-1})}),
-                    links=frozenset())
+        plan = Plan(
+            steps=frozenset([start_step, end_step]),
+            adj_list=frozendict({0: frozenset({-1})}),
+            links=frozenset(),
+            highest_id=0,
+        )
 
         # Agenda
         agenda = frozenset([(q, end_step) for q in end_step.preconditions])
@@ -99,9 +102,9 @@ class POP:
         # Threats
         threats = frozenset([])
 
-        return POPSearchNode(plan, agenda, threats)
+        return UCPOPSearchNode(plan, agenda, threats)
 
-    def _get_flaw(self, node: POPSearchNode) -> Tuple[Any, POPFlawType]:
+    def _get_flaw(self, node: UCPOPSearchNode) -> Tuple[Any, POPFlawType]:
         """This corresponds to the goal selection step in the POP
         non-deterministic pseudocode"""
         if node.threats:
@@ -111,24 +114,24 @@ class POP:
         else:
             return None, None
 
-    def _get_daughter_nodes_for_threat(self, node: POPSearchNode, flaw):
+    def _get_daughter_nodes_for_threat(self, node: UCPOPSearchNode, flaw):
         """This corresponds to the causal link protection step in the POP
         non-deterministic pseudocode"""
         a_t, link = flaw
         demotion_c = node.plan.can_demote(a_t, link)
         promotion_c = node.plan.can_promote(a_t, link)
         if demotion_c and promotion_c:
-            return [node.with_new_constraint(*demotion_c),
-                    node.with_new_constraint(*promotion_c)]
+            return [(node.with_new_constraint(*demotion_c), {}),
+                    (node.with_new_constraint(*promotion_c), {})]
         elif demotion_c:
-            return [node.with_new_constraint(*demotion_c)]
+            return [(node.with_new_constraint(*demotion_c), {})]
         elif promotion_c:
-            return [node.with_new_constraint(*promotion_c)]
+            return [(node.with_new_constraint(*promotion_c), {})]
         else:
             # Couldn't promote or demote to resolve threat so no daughter plans
             return []
 
-    def _get_daughter_nodes_for_opencond(self, node: POPSearchNode, flaw):
+    def _get_daughter_nodes_for_opencond(self, node: UCPOPSearchNode, flaw):
         """This corresponds to the action selection step in the POP
         non-deterministic pseudocode"""
         q, a_need = flaw
@@ -150,10 +153,10 @@ class POP:
 
         # all possible plans derived from all possible choices of a_add
         daughter_plans = new_step_plans + reused_step_plans
-        return daughter_plans
+        return [(child, {}) for child in daughter_plans]
 
 
-    def _get_daughter_nodes_for_flaw(self, node: POPSearchNode, flaw_type: POPFlawType, flaw):
+    def _get_daughter_nodes_for_flaw(self, node: UCPOPSearchNode, flaw_type: POPFlawType, flaw):
         if flaw_type == POPFlawType.THREAT:
             return self._get_daughter_nodes_for_threat(node, flaw)
         elif flaw_type == POPFlawType.OPENCOND:
@@ -173,14 +176,14 @@ class POP:
             # step 2
             flaw, flaw_type = self._get_flaw(node)
             # step 3
-            daughter_nodes = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
-            return daughter_nodes
+            daughter_nodes_and_extras = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
+            return daughter_nodes_and_extras, {"flaw_type": flaw_type}
 
         def pop_rank_fn(node):
             return len(node.plan.steps) + len(node.agenda) + len(node.threats)
 
         node = self._create_initial_node()
-        goal_node = best_first_search(node,
+        goal_node, search_tree = best_first_search(node,
                                       pop_daughters_fn,
                                       pop_goal_p,
                                       pop_rank_fn,
