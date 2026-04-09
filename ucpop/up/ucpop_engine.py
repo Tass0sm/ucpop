@@ -6,11 +6,10 @@ from typing import Callable, IO, Optional
 from functools import reduce
 
 import unified_planning as up
-from unified_planning import engines
-from unified_planning.plans import PartialOrderPlan
+from unified_planning.engines import PlanGenerationResultStatus
+from unified_planning.plans import ActionInstance
 
 from ucpop.ucpop import POP as UCPOP
-from unified_planning.engines import PlanGenerationResultStatus
 
 
 class UCPOPEngineImpl(up.engines.Engine,
