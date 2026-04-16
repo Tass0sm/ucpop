@@ -14,6 +14,7 @@ from unified_planning.model import Parameter, Variable
 from ucpop.up.partial_action_plans import PartialActionInstance, PartialActionPartialOrderPlan
 from ucpop.variable import Var
 from ucpop.pcop import PCOP
+from ucpop.constraints import make_constraint_partial_action_instance
 
 
 
@@ -73,7 +74,7 @@ class PCOPEngineImpl(up.engines.Engine,
                 return get_grounding_or_variable(v)
 
             params = tuple(map(get_grounding_or_variable_from_parameter, step.action.parameters))
-            action_instance = PartialActionInstance(step.action, params)
+            action_instance = make_constraint_partial_action_instance(step.action, params)
             id_to_instance_map[step.id] = action_instance
             graph[action_instance] = {}
 

@@ -14,6 +14,8 @@ from unified_planning.plans import ActionInstance
 
 from ucpop.variable import Var
 from ucpop.pop2 import POP2
+from ucpop.constraints import make_constraint_action_instance
+
 
 
 
@@ -63,7 +65,7 @@ class POP2EngineImpl(up.engines.Engine,
                 return result
 
             params = tuple(map(get_grounding, step.action.parameters))
-            action_instance = ActionInstance(step.action, params)
+            action_instance = make_constraint_action_instance(step.action, params)
             id_to_instance_map[step.id] = action_instance
             graph[action_instance] = []
 

@@ -10,6 +10,8 @@ from unified_planning.engines import PlanGenerationResultStatus
 from unified_planning.plans import ActionInstance
 
 from ucpop.ucpop import POP as UCPOP
+from ucpop.constraints import make_constraint_action_instance
+
 
 
 class UCPOPEngineImpl(up.engines.Engine,
@@ -65,7 +67,7 @@ class UCPOPEngineImpl(up.engines.Engine,
         for step in plan.steps:
             if step.id in [0, -1]:
                 continue
-            action_instance = ActionInstance(step.action)
+            action_instance = make_constraint_action_instance(step.action)
             id_to_instance_map[step.id] = action_instance
             graph[action_instance] = []
 

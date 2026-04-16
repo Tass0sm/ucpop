@@ -488,6 +488,9 @@ def make_fill_and_deliver_bowl_small_problem() -> unified_planning.model.Problem
     pick.add_effect(holding(b), True)
     pick.add_effect(handempty(), False)
 
+    # MARK: This is a new method we should add to a subclass of InstantanousAction. Perhaps ConstraintEnabledInstantaneousAction(). 
+    #pick.add_constraint_generator(asdjlsad)
+
     fill = unified_planning.model.InstantaneousAction(
         'fill', b=Bowl, s=WaterSource, l=Location
     )
