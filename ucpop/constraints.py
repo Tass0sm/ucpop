@@ -1,3 +1,10 @@
+from unified_planning.plans import ActionInstance
+from unified_planning.model import InstantaneousAction
+
+from ucpop.up.partial_action_plans import PartialActionInstance
+
+
+
 class ConstraintGenerator:
     """ Base class for symbolic-to-GoC constraint gen
 
