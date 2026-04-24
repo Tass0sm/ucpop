@@ -95,13 +95,13 @@ class BasePlan:
         """
 
         if u == 0:
-            return True # the start node can always be before another
+            return (u, v) # the start node can always be before another
         if v == -1:
-            return True # the end node can always be after another
+            return (u, v) # the end node can always be after another
         if u == -1:
-            return False # the end node can never be before another
+            return None # the end node can never be before another
         if v == 0:
-            return False # the start node can never be after another
+            return None # the start node can never be after another
 
         # if edge already exists or its a self-loop
         if v in self.adj_list[u] or (u == v):
@@ -573,13 +573,13 @@ class PartialConditionalActionPlan(PartialActionPlan):
         """
 
         if u == 0:
-            return True # the start node can always be before another
+            return (u, v) # the start node can always be before another
         if v == -1:
-            return True # the end node can always be after another
+            return (u, v) # the end node can always be after another
         if u == -1:
-            return False # the end node can never be before another
+            return None # the end node can never be before another
         if v == 0:
-            return False # the start node can never be after another
+            return None # the start node can never be after another
 
         # if edge already exists or its a self-loop
         if v in map(lambda x: x[0], self.adj_list[u]) or (u == v):
