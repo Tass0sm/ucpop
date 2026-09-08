@@ -23,6 +23,22 @@ from ucpop.variable import Var, DisjunctiveBindings as Bindings, Unifier, most_g
 logger = logging.getLogger(__name__)
 
 
+def _symbol_sort_key(s):
+    """Deterministic ordering for a unification Symbol (Var | FNode) that
+    doesn't rely on Python's (per-process-randomized) hash/set order."""
+    if isinstance(s, Var):
+        return (0, s.name, s.num)
+    else:  # FNode
+        return (1, s.node_id)
+
+
+def _unifier_sort_key(unifier):
+    """Deterministic ordering for a single unifier (list of (x, y, eq)
+    triples), used to canonicalize threat-accommodation clauses before
+    iterating them."""
+    return tuple(sorted((_symbol_sort_key(x), _symbol_sort_key(y), eq) for x, y, eq in unifier))
+
+
 @dataclass(eq=True, frozen=True)
 class PCOPSearchNode:
     plan: Plan
@@ -115,15 +131,19 @@ class PCOPSearchNode:
     def with_new_agenda(self, new_agenda):
         return PCOPSearchNode(self.plan, new_agenda, self.threats)
 
+    def _tie_break_key(self):
+        """Least-commitment tie-break: prefer fewer variable bindings first,
+        then fall back to the size of self.plan. Mirrors pcop_rank_fn so that
+        heapq's fallback comparison (used only when ranks are exactly equal)
+        agrees with the primary ranking."""
+        return (self.plan.bindings.size,
+                len(self.plan.steps) + len(self.agenda) + len(self.threats))
+
     def __le__(self, other):
-        """Compare the size of self.plan to other.plan"""
-        return (len(self.plan.steps) + len(self.agenda) + len(self.threats)) <= \
-            (len(other.plan.steps) + len(other.agenda) + len(other.threats))
+        return self._tie_break_key() <= other._tie_break_key()
 
     def __lt__(self, other):
-        """Compare the size of self.plan to other.plan"""
-        return (len(self.plan.steps) + len(self.agenda) + len(self.threats)) < \
-            (len(other.plan.steps) + len(other.agenda) + len(other.threats))
+        return self._tie_break_key() < other._tie_break_key()
 
 
 class PCOPFlawType(Enum):
@@ -171,11 +191,21 @@ class PCOP:
 
     def _get_flaw(self, node: PCOPSearchNode) -> Tuple[Any, PCOPFlawType]:
         """This corresponds to the goal selection step in the POP
-        non-deterministic pseudocode"""
+        non-deterministic pseudocode.
+
+        Flaw selection must be a deterministic function of plan content, not
+        of Python's (per-process-randomized) frozenset iteration order --
+        hence `min(..., key=...)` over stable, hash-independent keys instead
+        of `next(iter(...))`.
+        """
         if node.threats:
-            return next(iter(node.threats)), PCOPFlawType.THREAT
+            a_t, link, threat_conditions = min(
+                node.threats,
+                key=lambda t: (t[0].id, t[1].step_p.id, t[1].condition.node_id, t[1].step_c.id),
+            )
+            return (a_t, link, threat_conditions), PCOPFlawType.THREAT
         elif node.agenda:
-            q, a_c = next(iter(node.agenda))
+            q, a_c = min(node.agenda, key=lambda t: (t[1].id, t[0].node_id))
 
             if (~q).is_exists() or q.is_exists() or (~q).is_forall() or q.is_forall():
                 return (q, a_c), PCOPFlawType.UNIVERSAL_GOAL
@@ -211,7 +241,7 @@ class PCOP:
         # paper. Right now its not the goal.
 
         if not demotion_c and not promotion_c:
-            for a_r in node.plan.dfs_steps(a_t) - {a_t.id}:
+            for a_r in sorted(node.plan.dfs_steps(a_t) - {a_t.id}, key=lambda s: s.id):
                 if node.plan.redeems(a_r, link) and (new_edge := node.plan.can_constrain(a_r.id, link.step_c.id)):
                     # in effect, this is now replacing conditionally replacing
                     # the threatened causal link. Not sure if this is the best
@@ -225,7 +255,14 @@ class PCOP:
         # each with M items and you choose to only make disunification per
         # clause, there are M^N possible descendant nodes for an accomodation.
 
-        for requirements in itertools.product(*threat_conditions):
+        # canonicalize clause and within-clause order so the product below is
+        # a deterministic function of threat_conditions' content, not of
+        # frozenset iteration order
+        sorted_clauses = [tuple(sorted(clause, key=lambda u: (_symbol_sort_key(u[0]), _symbol_sort_key(u[1]), u[2])))
+                          for clause in threat_conditions]
+        sorted_clauses.sort(key=_unifier_sort_key)
+
+        for requirements in itertools.product(*sorted_clauses):
             if unifier := node.plan.can_accommodate(a_t, link, requirements):
                 new_nodes.append(node.with_new_bindings(unifier, flaw))
 
@@ -313,7 +350,13 @@ class PCOP:
             return daughter_nodes_and_extras, { "flaw_type": flaw_type }
 
         def pcop_rank_fn(node):
-            return len(node.plan.steps) + len(node.agenda) + len(node.threats) + node.plan.bindings.size
+            # Least-commitment: rank primarily by number of variable bindings
+            # committed so far (fewer is better -- e.g. prefer resolving a
+            # threat via promotion/demotion, which add no bindings, over
+            # accommodation, which does), and only fall back to plan/agenda/
+            # threat size to break ties among equally-committed plans.
+            return (node.plan.bindings.size,
+                    len(node.plan.steps) + len(node.agenda) + len(node.threats))
 
         node = self._create_initial_node()
         goal_node, search_tree = best_first_search(node,
