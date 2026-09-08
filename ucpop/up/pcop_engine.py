@@ -142,17 +142,6 @@ class PCOPEngineImpl(up.engines.Engine,
         plan, search_path = PCOP(problem).execute()
 
         if plan:
-
-            for i, search_path_link_i in enumerate(search_path):
-                if i != len(search_path) - 1:
-                    node_i, extras_i = search_path_link_i
-                    PCOPEngineImpl._print_plan(i, node_i)
-                    flaw_type = extras_i["flaw_type"]
-                    print(f"Addressed {flaw_type}. ", extras_i["note"])
-                else:
-                    node_i = search_path_link_i
-                    PCOPEngineImpl._print_plan(i, node_i)
-
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
             action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(plan)
             return up.engines.PlanGenerationResult(
