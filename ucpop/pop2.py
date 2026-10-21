@@ -85,9 +85,10 @@ class POP2SearchNode:
         new_threats = self.threats.union(new_threats_from_binding)
         return POP2SearchNode(new_plan, new_agenda, new_threats)
 
-    def with_new_constraint(self, first_id: int, second_id: int):
+    def with_new_constraint(self, first_id: int, second_id: int, addressed_threat):
         new_plan = self.plan.with_new_constraint(first_id, second_id)
-        return POP2SearchNode(new_plan, self.agenda, self.threats)
+        new_threats = self.threats - {addressed_threat}
+        return POP2SearchNode(new_plan, self.agenda, new_threats)
 
     def with_new_agenda(self, new_agenda):
         return POP2SearchNode(self.plan, new_agenda, self.threats)
@@ -173,12 +174,12 @@ class POP2:
         demotion_c = node.plan.can_demote(a_t, link)
         promotion_c = node.plan.can_promote(a_t, link)
         if demotion_c and promotion_c:
-            return [node.with_new_constraint(*demotion_c),
-                    node.with_new_constraint(*promotion_c)]
+            return [node.with_new_constraint(*demotion_c, flaw),
+                    node.with_new_constraint(*promotion_c, flaw)]
         elif demotion_c:
-            return [node.with_new_constraint(*demotion_c)]
+            return [node.with_new_constraint(*demotion_c, flaw)]
         elif promotion_c:
-            return [node.with_new_constraint(*promotion_c)]
+            return [node.with_new_constraint(*promotion_c, flaw)]
         else:
             # Couldn't promote or demote to resolve threat so no daughter plans
             return []
