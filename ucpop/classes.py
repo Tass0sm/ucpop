@@ -1,8 +1,8 @@
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Optional, FrozenSet
+from typing import Optional, FrozenSet, Tuple, Any
 
 from frozendict import frozendict
 
@@ -296,11 +296,14 @@ class PartialActionPlan(BasePlan):
 
         return binding_preconds, logical_preconds
 
+    @staticmethod
+    def _step_effects(action: Action):
+        return effects_to_conjuncts(action.effects)
+
     def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, unifier: Unifier):
         new_id = self.highest_id + 1
         binding_preconds, logical_preconds = PartialActionPlan._separate_preconditions(action.preconditions, new_id)
-        effect_conjuncts = effects_to_conjuncts(action.effects)
-        a_add = PlanStep(new_id, frozenset(logical_preconds), effect_conjuncts, action)
+        a_add = PlanStep(new_id, frozenset(logical_preconds), self._step_effects(action), action)
         new_link = Link(a_add, q, a_need)
 
         new_steps = self.steps.union({a_add})
@@ -310,7 +313,7 @@ class PartialActionPlan(BasePlan):
         new_bindings = self.bindings.union(new_variables=[Var(p.name, p.type, new_id) for p in action.parameters],
                                            new_constraints=(unifier + binding_preconds))
 
-        return (PartialActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=a_add.id),
+        return (replace(self, steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=a_add.id),
                 a_add,
                 new_link,
                 logical_preconds)
@@ -318,24 +321,20 @@ class PartialActionPlan(BasePlan):
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, unifier: Unifier):
         new_link = Link(a_add, q, a_need)
 
-        new_steps = self.steps
         new_adj_list = add_edges(self.adj_list, { a_add.id: [a_need.id] })
         new_links = self.links.union({new_link})
 
         new_bindings = self.bindings.union(new_constraints=unifier)
 
-        return PartialActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=self.highest_id), new_link
+        return replace(self, adj_list=new_adj_list, links=new_links, bindings=new_bindings), new_link
 
     def with_new_constraint(self, first_id: int, second_id: int):
         new_adj_list = add_edges(self.adj_list, { first_id: [second_id] })
-        return PartialActionPlan(steps=self.steps, adj_list=new_adj_list, links=self.links, bindings=self.bindings, highest_id=self.highest_id)
+        return replace(self, adj_list=new_adj_list)
 
     def with_new_binding(self, var: Var, obj: Object):
-        new_steps = self.steps
-        new_adj_list = self.adj_list
-        new_links = self.links
         new_bindings = self.bindings.union(new_constraints=[(var, obj, True)])
-        return PartialActionPlan(steps=new_steps, adj_list=new_adj_list, links=new_links, bindings=new_bindings, highest_id=self.highest_id)
+        return replace(self, bindings=new_bindings)
 
     def reusable_steps(self, q: FNode, a_need: PlanStep):
         q_step_id = a_need.id
@@ -362,6 +361,37 @@ class PartialActionPlan(BasePlan):
                 return True
 
         return False
+
+
+@dataclass(eq=True, frozen=True, kw_only=True)
+class POP3Plan(PartialActionPlan):
+    """A plan whose steps keep their full (possibly conditional) effects. Start-step effects stay plain FNodes; action-step effects are
+    unified_planning Effects so their `when` condition is still available."""
+    bindings: Bindings
+    disabled: FrozenSet[Tuple[int, Any]] = frozenset()   # (step id, effect) pairs whose antecedent was confronted
+
+    @staticmethod
+    def _step_effects(action: Action):
+        return frozenset(action.effects)
+
+    def threatening_effects(self, step: PlanStep, link: Link):
+        """Effects of STEP that clobber LINK under the current bindings
+        without any new codesignations (forced threats). Effects disabled by
+        confrontation never threaten."""
+        if not self.possibly_between(step, link.step_p, link.step_c):
+            return []
+
+        threats = []
+        for effect in step.effects:
+            if (step.id, effect) in self.disabled:
+                continue
+            unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
+            if unifier is not None and len(unifier) == 0:
+                threats.append(effect)
+        return threats
+
+    def with_disabled_effect(self, step: PlanStep, effect):
+        return replace(self, disabled=self.disabled | {(step.id, effect)})
 
 
 @dataclass(eq=True, frozen=True, kw_only=True)

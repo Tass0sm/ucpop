@@ -48,6 +48,9 @@ class POP2EngineImpl(up.engines.Engine,
     def supports(problem_kind):
         return problem_kind <= POP2EngineImpl.supported_kind()
 
+    def _planner(self, problem):
+        return POP2(problem)
+
     def _action_adjacency_list_from_plan(self, plan):
         id_to_instance_map = {}
         graph = {}
@@ -86,7 +89,7 @@ class POP2EngineImpl(up.engines.Engine,
             output_stream: Optional[IO[str]] = None
     ) -> 'up.engines.PlanGenerationResult':
 
-        plan, _ = POP2(problem).execute()
+        plan, _ = self._planner(problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
