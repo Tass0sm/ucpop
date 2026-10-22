@@ -383,19 +383,20 @@ def most_general_unification(q: FNode, q_step_id: int, r: Union[FNode, Effect], 
         return None
 
 
+def to_symbol(x: FNode, step_id: int) -> Symbol:
+    if x.node_type == OperatorKind.PARAM_EXP:
+        return Var(x.parameter().name, x.parameter().type, step_id)
+    elif x.node_type == OperatorKind.OBJECT_EXP:
+        return x.constant_value()
+    return x
+
+
 def unify_args(q_args: tuple[FNode, ...], q_step_id: int, r_args: tuple[FNode, ...], r_step_id: int, bindings) -> Optional[Unifier]:
     result = []
 
     for x, y in zip(q_args, r_args):
-
-        if x.node_type == OperatorKind.PARAM_EXP:
-            x = Var(x.parameter().name, x.parameter().type, q_step_id)
-        elif x.node_type == OperatorKind.OBJECT_EXP:
-            x = x.constant_value()
-        if y.node_type == OperatorKind.PARAM_EXP:
-            y = Var(y.parameter().name, y.parameter().type, r_step_id)
-        elif y.node_type == OperatorKind.OBJECT_EXP:
-            y = y.constant_value()
+        x = to_symbol(x, q_step_id)
+        y = to_symbol(y, r_step_id)
 
         can_unify, unifier = bindings.can_unify(x, y)
         if can_unify:

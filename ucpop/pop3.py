@@ -8,6 +8,9 @@ Extends POP2 with:
   open condition of the threatening step;
 - disjunctive goals and preconditions: a disjunction on the agenda is
   replaced by one of its disjuncts;
+- equality goals: an (in)equality on the agenda, e.g. in an antecedent or a
+  disjunct, is not supported by a link but added to the bindings as a
+  (non)codesignation constraint, as are an action's top-level ones;
 
 As in POP2, only forced threats are flaws, i.e. the clobbering effect unifies
 with the negated link condition without any new codesignations (section 5.1
@@ -19,7 +22,7 @@ effect in that step, so it is not found as a threat again.
 import logging
 from enum import Enum
 from typing import Tuple, FrozenSet, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from frozendict import frozendict
 from unified_planning.model import FNode, Problem, Action, Effect
@@ -27,7 +30,7 @@ from unified_planning.model import FNode, Problem, Action, Effect
 from ucpop.search import best_first_search
 from ucpop.classes import PlanStep, Link, POP3Plan as Plan
 from ucpop.utils import initial_values_to_conjuncts
-from ucpop.variable import Bindings, Unifier, most_general_unification
+from ucpop.variable import Bindings, Unifier, most_general_unification, to_symbol
 from ucpop.pop2 import POP2SearchNode, POP2
 
 logger = logging.getLogger(__name__)
@@ -60,6 +63,16 @@ def _conjuncts(q: FNode) -> tuple[FNode, ...] | None:
         return q.args
     if q.is_not() and (~q).is_or():
         return tuple(~a for a in (~q).args)
+    return None
+
+
+def _equality(q: FNode) -> tuple[FNode, FNode, bool] | None:
+    """The terms of Q and whether they must codesignate, or None if Q is not
+    an equality or the negation of one."""
+    if q.is_equals():
+        return (*q.args, True)
+    if q.is_not() and (~q).is_equals():
+        return (*(~q).args, False)
     return None
 
 
@@ -126,6 +139,10 @@ class POP3SearchNode(POP2SearchNode):
         new_agenda = self.agenda | {(goal, a_t)}
         return self._make(new_plan, new_agenda), { "note": f"confronting with {goal} at {a_t} because it threatens {link}" }
 
+    def with_new_constraints(self, constraints: Unifier, q: FNode, a_need: PlanStep):
+        new_plan = replace(self.plan, bindings=self.plan.bindings.union(new_constraints=constraints))
+        return self._make(new_plan, self.agenda - {(q, a_need)}), { "note": f"constraining bindings with {q} in {a_need}" }
+
     def with_new_agenda(self, new_agenda):
         return POP3SearchNode(self.plan, new_agenda, self.threats)
 
@@ -149,6 +166,7 @@ class POP3FlawType(Enum):
     CONJUNCTION_GOAL = 2
     DISJUNCTION_GOAL = 3
     UNBOUND_VAR = 4
+    EQUALITY_GOAL = 5
 
 
 class POP3(POP2):
@@ -169,7 +187,9 @@ class POP3(POP2):
         return POP3SearchNode(plan, agenda, frozenset())
 
     def _classify_goal(self, q: FNode):
-        if _conjuncts(q) is not None:
+        if _equality(q) is not None:
+            return POP3FlawType.EQUALITY_GOAL
+        elif _conjuncts(q) is not None:
             return POP3FlawType.CONJUNCTION_GOAL
         elif _disjuncts(q) is not None:
             return POP3FlawType.DISJUNCTION_GOAL
@@ -249,6 +269,17 @@ class POP3(POP2):
         return [(node.with_new_agenda(node.agenda - {(q, a_need)} | {(d, a_need)}), { "note": f"choosing {d} for {q}" })
                 for d in sorted(_disjuncts(q), key=lambda d: d.node_id)]
 
+    def _get_daughter_nodes_for_equality_goal(self, node: POP3SearchNode, flaw):
+        """Add an (in)equality to the bindings, or fail if they contradict it."""
+        q, a_need = flaw
+        x, y, codesignate = _equality(q)
+        x, y = to_symbol(x, a_need.id), to_symbol(y, a_need.id)
+        bindings = node.plan.bindings
+        consistent, constraints = bindings.can_unify(x, y) if codesignate else bindings.can_divorce(x, y)
+        if not consistent:
+            return []
+        return [node.with_new_constraints(constraints, q, a_need)]
+
     def _get_daughter_nodes_for_flaw(self, node: POP3SearchNode, flaw_type: Enum, flaw):
         if flaw_type == POP3FlawType.THREAT:
             return self._get_daughter_nodes_for_threat(node, flaw)
@@ -260,6 +291,8 @@ class POP3(POP2):
             return self._get_daughter_nodes_for_disjunction_goal(node, flaw)
         elif flaw_type == POP3FlawType.UNBOUND_VAR:
             return self._get_daughter_nodes_for_unbound_var(node, flaw)
+        elif flaw_type == POP3FlawType.EQUALITY_GOAL:
+            return self._get_daughter_nodes_for_equality_goal(node, flaw)
         else:
             return []
 
