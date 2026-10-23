@@ -5,14 +5,18 @@ description = ""
 authors = [
     {name = "Tassos Manganaris"}
 ]
-readme = "README.org"
+readme = {file = "README.org", content-type = "text/plain"}
 requires-python = ">=3.10"
 dependencies = [
     "unified-planning (>=1.2.0,<2.0.0)",
-    "frozendict (>=2.4.6,<3.0.0)"
+    "frozendict (>=2.4.6,<3.0.0)",
+    "networkx (>=3.0,<4.0)"
 ]
 
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["uv_build>=0.9.27,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
