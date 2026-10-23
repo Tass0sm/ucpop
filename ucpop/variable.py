@@ -15,6 +15,13 @@ class Var:
 
 
 @dataclass(eq=True, frozen=True)
+class UniversalVar(Var):
+    """A universally quantified variable of an effect of step NUM. It is never
+    added to Bindings: unifying it with a term only selects which instance of
+    the effect is meant (section 7.3 of the paper)."""
+
+
+@dataclass(eq=True, frozen=True)
 class BindingNode:
     parent: str
     constant: Optional[str]
@@ -386,6 +393,8 @@ def most_general_unification(q: FNode, q_step_id: int, r: Union[FNode, Effect], 
 def to_symbol(x: FNode, step_id: int) -> Symbol:
     if x.node_type == OperatorKind.PARAM_EXP:
         return Var(x.parameter().name, x.parameter().type, step_id)
+    elif x.node_type == OperatorKind.VARIABLE_EXP:
+        return UniversalVar(x.variable().name, x.variable().type, step_id)
     elif x.node_type == OperatorKind.OBJECT_EXP:
         return x.constant_value()
     return x
@@ -393,10 +402,25 @@ def to_symbol(x: FNode, step_id: int) -> Symbol:
 
 def unify_args(q_args: tuple[FNode, ...], q_step_id: int, r_args: tuple[FNode, ...], r_step_id: int, bindings) -> Optional[Unifier]:
     result = []
+    # the term each universal variable has been unified with so far
+    instance = {}
 
     for x, y in zip(q_args, r_args):
         x = to_symbol(x, q_step_id)
         y = to_symbol(y, r_step_id)
+
+        if isinstance(x, UniversalVar):
+            x, y = y, x
+        if isinstance(y, UniversalVar):
+            if y in instance:
+                # a repeated universal variable must match the same term
+                y = instance[y]
+            elif y.type.is_compatible(x.type):
+                instance[y] = x
+                result.append((x, y, True))
+                continue
+            else:
+                return None
 
         can_unify, unifier = bindings.can_unify(x, y)
         if can_unify:
@@ -405,3 +429,15 @@ def unify_args(q_args: tuple[FNode, ...], q_step_id: int, r_args: tuple[FNode, .
             return None
 
     return result
+
+
+def split_universal(unifier: Unifier) -> Tuple[Unifier, dict[UniversalVar, Symbol]]:
+    """Split UNIFIER into its ordinary codesignations and the instance it
+    selects, i.e. the term each universal variable was unified with."""
+    ordinary, instance = [], {}
+    for x, y, eq in unifier:
+        if isinstance(y, UniversalVar):
+            instance[y] = x
+        else:
+            ordinary.append((x, y, eq))
+    return ordinary, instance

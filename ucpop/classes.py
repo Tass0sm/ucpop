@@ -17,7 +17,8 @@ from ucpop.variable import (
     DisjunctiveBindings,
     Unifier,
     DisjunctiveUnifier,
-    most_general_unification
+    most_general_unification,
+    split_universal
 )
 
 logger = logging.getLogger(__name__)
@@ -401,6 +402,53 @@ class POP3Plan(PartialActionPlan):
 
     def with_used_effect(self, step: PlanStep, effect):
         return replace(self, used=self.used | {(step.id, effect)})
+
+
+@dataclass(eq=True, frozen=True, kw_only=True)
+class UCPOPPlan(POP3Plan):
+    """A POP3 plan whose effects may be universally quantified. Confrontation
+    disables, and a link uses, only one instance of such an effect, so
+    disabled and used hold (step id, effect, instance) triples, where instance
+    pairs each universal variable the unifier bound with the variable
+    introduced for it."""
+
+    def threatening_effects(self, step: PlanStep, link: Link):
+        """Effects of STEP that clobber LINK under the current bindings. As
+        in section 7.3 of the paper, a threat is forced when the unifier
+        binds nothing but the effect's universally quantified variables."""
+        if not self.possibly_between(step, link.step_p, link.step_c):
+            return []
+
+        threats = []
+        for effect in step.effects:
+            unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
+            if unifier is None:
+                continue
+            ordinary, instance = split_universal(unifier)
+            if not ordinary and not self._is_disabled(step, effect, instance):
+                threats.append(effect)
+        return threats
+
+    def _has_instance(self, triples, step: PlanStep, effect, instance):
+        """Whether TRIPLES holds the instance of EFFECT of STEP that INSTANCE,
+        a map from universal variables to terms, selects."""
+        def same(x, y):
+            return self.bindings.get_grounding_or_variable(x) == self.bindings.get_grounding_or_variable(y)
+
+        return any(step_id == step.id and e == effect and all(u in instance and same(instance[u], v) for u, v in pairs)
+                   for step_id, e, pairs in triples)
+
+    def _is_disabled(self, step: PlanStep, effect, instance):
+        return self._has_instance(self.disabled, step, effect, instance)
+
+    def with_disabled_effect(self, step: PlanStep, effect, instance=frozenset()):
+        return replace(self, disabled=self.disabled | {(step.id, effect, instance)})
+
+    def uses(self, step: PlanStep, effect, instance={}):
+        return self._has_instance(self.used, step, effect, instance)
+
+    def with_used_effect(self, step: PlanStep, effect, instance=frozenset()):
+        return replace(self, used=self.used | {(step.id, effect, instance)})
 
 
 @dataclass(eq=True, frozen=True, kw_only=True)

@@ -1,189 +1,198 @@
-"""Implementation of POP based on
+"""Implementation of UCPOP following section 7 of
 https://homes.cs.washington.edu/~weld/papers/pi.pdf
 
+Extends POP3 (action schemata, conditional effects and disjunction) with
+universal quantification. As in the paper, the universe of objects is finite
+and static, so quantified goals are replaced with their universal base: a
+universally quantified goal becomes the conjunction of its instances, and an
+existentially quantified one its body with each variable replaced by a fresh
+variable of the step (a Skolem constant). Inside a universal goal, each
+instance gets its own Skolem constants. Like any variable, they are bound to
+objects of their type before the plan is complete.
+
+Universally quantified effects are not expanded. Instead, each time one is
+used to support a link or is confronted, the instance needed is created: the
+effect's universal variables get fresh variables of the step, codesignated
+with the terms they unified with, and the antecedent and confrontation goals
+are posted for that instance only. The antecedent of an instance that already
+supports a link is not posted again. A threat from such an effect is forced
+when the unifier binds nothing but its universal variables.
 """
 
-import random
+import itertools
+import logging
+from dataclasses import dataclass, replace
 from enum import Enum
-from typing import List, Dict, Tuple, FrozenSet, Any
-from dataclasses import dataclass
 
 from frozendict import frozendict
-from unified_planning.model import FNode, Problem, Action, Effect
+from unified_planning.model import FNode, Action, Effect, Parameter
+from unified_planning.shortcuts import And
 
-from ucpop.search import best_first_search
-from ucpop.classes import PlanStep, Link, Plan
+from ucpop.classes import PlanStep, UCPOPPlan as Plan
+from ucpop.pop3 import POP3, POP3SearchNode, _effect_condition
 from ucpop.utils import initial_values_to_conjuncts
+from ucpop.variable import Bindings, Unifier, Var, UniversalVar, most_general_unification, split_universal
 
+logger = logging.getLogger(__name__)
+
+
+def _fresh_parameters(variables, bindings: Bindings) -> list[Parameter]:
+    """A parameter, with a name not used in BINDINGS, for each of VARIABLES."""
+    n = len(bindings.nodes)
+    return [Parameter(f"{v.name}#{n + i}", v.type, v.environment) for i, v in enumerate(variables)]
 
 
 @dataclass(eq=True, frozen=True)
-class UCPOPSearchNode:
+class UCPOPSearchNode(POP3SearchNode):
     plan: Plan
-    agenda: FrozenSet[FNode]
-    threats: FrozenSet[Tuple[PlanStep, Link]]
 
-    # Nota Bene, threats are considered part of the search node so that they are
-    # lazily resolved during search, as opposed to eagerly resolved during the
-    # generation of daughter plans from agenda items
+    def _instantiate(self, effect, step_id: int, unifier: Unifier):
+        """The instance of EFFECT of step STEP_ID selected by UNIFIER. Each
+        universal variable of the effect gets a fresh variable of the step.
 
-    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep):
-        new_plan, a_add, new_link = self.plan.with_new_step(action, q, a_need)
-        new_agenda = self.agenda - {(q, a_need)} | set([(pc, a_add) for pc in a_add.preconditions])
+        Returns the plan with the fresh variables added, the constraints to
+        add (the ordinary part of UNIFIER plus a codesignation for each fresh
+        variable of a universal variable the unifier bound), the antecedent
+        of the instance (or None), and the instance itself as (universal
+        variable, fresh variable) pairs."""
+        ordinary, instance = split_universal(unifier)
+        if not isinstance(effect, Effect) or not effect.is_forall():
+            return self.plan, ordinary, _effect_condition(effect), frozenset()
 
-        # test all steps in new plan to identify which threaten the new link
-        threats_to_new_link = []
-        for step in new_plan.steps:
-            if new_plan.threatens(step, new_link):
-                threats_to_new_link.append((step, new_link))
+        em = effect.environment.expression_manager
+        fresh_vars, substitution, constraints, pairs = [], {}, list(ordinary), set()
+        for v, p in zip(effect.forall, _fresh_parameters(effect.forall, self.plan.bindings)):
+            fresh = Var(p.name, p.type, step_id)
+            fresh_vars.append(fresh)
+            substitution[em.VariableExp(v)] = em.ParameterExp(p)
+            if (u := UniversalVar(v.name, v.type, step_id)) in instance:
+                constraints.append((fresh, instance[u], True))
+                pairs.add((u, fresh))
 
-        # test all links in new plan to identify which are threatened by the new step
-        threats_from_new_step = []
-        for link in new_plan.links:
-            if new_plan.threatens(a_add, link):
-                threats_from_new_step.append((a_add, link))
+        plan = replace(self.plan, bindings=self.plan.bindings.union(new_variables=fresh_vars))
+        condition = _effect_condition(effect)
+        antecedent = condition.substitute(substitution) if condition is not None else None
+        return plan, constraints, antecedent, frozenset(pairs)
 
-        added_threats = threats_to_new_link + threats_from_new_step
-        new_threats = self.threats.union(added_threats)
-        return POPSearchNode(new_plan, new_agenda, new_threats)
+    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, effect, unifier: Unifier):
+        plan, constraints, antecedent, instance = self._instantiate(effect, self.plan.highest_id + 1, unifier)
+        new_plan, a_add, new_link, logical_preconds = plan.with_new_step(action, q, a_need, constraints)
+        new_plan = new_plan.with_used_effect(a_add, effect, instance)
 
-    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep):
-        new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need)
+        new_goals = set((pc, a_add) for pc in logical_preconds)
+        if antecedent is not None:
+            new_goals.add((antecedent, a_add))
+        new_agenda = self.agenda - {(q, a_need)} | new_goals
+
+        logger.info(f"Making plan using new action {action.name} with id {a_add.id} and unifier {unifier}")
+        return self._make(new_plan, new_agenda), { "note": f"adding {a_add} for {q} in {a_need}" }
+
+    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, effect, unifier: Unifier):
+        ordinary, instance = split_universal(unifier)
+        if self.plan.uses(a_add, effect, instance):
+            # this instance already supports a link, so its antecedent is
+            # already a goal
+            new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, ordinary)
+            antecedent = None
+        else:
+            plan, constraints, antecedent, pairs = self._instantiate(effect, a_add.id, unifier)
+            new_plan, new_link = plan.with_reused_step(a_add, q, a_need, constraints)
+            new_plan = new_plan.with_used_effect(a_add, effect, pairs)
+
         new_agenda = self.agenda - {(q, a_need)}
+        if antecedent is not None:
+            new_agenda = new_agenda | {(antecedent, a_add)}
 
-        # test all steps in new plan to identify which threaten the new link
-        threats_to_new_link = []
-        for step in new_plan.steps:
-            if new_plan.threatens(step, new_link):
-                threats_to_new_link.append((step, new_link))
+        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} and unifier {unifier}")
+        return self._make(new_plan, new_agenda), { "note": f"reusing step {a_add} for {q} in {a_need}" }
 
-        new_threats = self.threats.union(threats_to_new_link)
-        return POPSearchNode(new_plan, new_agenda, new_threats)
+    def with_confrontation(self, addressed_threat):
+        a_t, link, effect = addressed_threat
+        unifier = most_general_unification(~link.condition, link.step_c.id, effect, a_t.id, self.plan.bindings)
+        plan, constraints, antecedent, instance = self._instantiate(effect, a_t.id, unifier)
 
-    def with_new_constraint(self, first_id: int, second_id: int):
-        new_plan = self.plan.with_new_constraint(first_id, second_id)
-        return POPSearchNode(new_plan, self.agenda, self.threats)
+        new_plan = replace(plan, bindings=plan.bindings.union(new_constraints=constraints))
+        new_plan = new_plan.with_disabled_effect(a_t, effect, instance)
+        new_agenda = self.agenda | {(~antecedent, a_t)}
+        return self._make(new_plan, new_agenda), { "note": f"confronting with {~antecedent} at {a_t} because it threatens {link}" }
 
-    def __le__(self, other):
-        """Compare the size of self.plan to other.plan"""
-        return (len(self.plan.steps) + len(self.agenda) + len(self.threats)) <= \
-            (len(other.plan.steps) + len(other.agenda) + len(other.threats))
-
-    def __lt__(self, other):
-        """Compare the size of self.plan to other.plan"""
-        return (len(self.plan.steps) + len(self.agenda) + len(self.threats)) < \
-            (len(other.plan.steps) + len(other.agenda) + len(other.threats))
+    def with_skolem_constants(self, q: FNode, a_need: PlanStep, q_base: FNode, skolems: list[Var]):
+        new_plan = replace(self.plan, bindings=self.plan.bindings.union(new_variables=skolems))
+        new_agenda = self.agenda - {(q, a_need)} | {(q_base, a_need)}
+        return self._make(new_plan, new_agenda), { "note": f"replaced {q} with {q_base}" }
 
 
-class POPFlawType(Enum):
-    THREAT = 0
-    OPENCOND = 1
+class UCPOPFlawType(Enum):
+    UNIVERSAL_GOAL = 0
 
 
-class POP:
+class UCPOP(POP3):
 
-    def __init__(self, problem: Problem):
-        self.problem = problem
-
-    def _create_initial_node(self) -> POPSearchNode:
-        # Plan
+    def _create_initial_node(self) -> UCPOPSearchNode:
         start_step = PlanStep(id=0, effects=initial_values_to_conjuncts(self.problem.initial_values))
         end_step = PlanStep(id=-1, preconditions=frozenset(self.problem.goals))
+
         plan = Plan(steps=frozenset([start_step, end_step]),
                     adj_list=frozendict({0: frozenset({-1})}),
+                    bindings=Bindings.empty(),
                     links=frozenset())
 
-        # Agenda
         agenda = frozenset([(q, end_step) for q in end_step.preconditions])
 
-        # Threats
-        threats = frozenset([])
+        return UCPOPSearchNode(plan, agenda, frozenset())
 
-        return POPSearchNode(plan, agenda, threats)
+    def _compute_universal_base(self, q: FNode) -> FNode:
+        """Replace the outermost (universal) quantifier of Q with the
+        conjunction of its instances over the problem's objects. If Q is
+        negated, its body is negated in each instance."""
+        negated = q.is_not()
+        if negated:
+            q = ~q
 
-    def _get_flaw(self, node: POPSearchNode) -> Tuple[Any, POPFlawType]:
-        """This corresponds to the goal selection step in the POP
-        non-deterministic pseudocode"""
-        if node.threats:
-            return next(iter(node.threats)), POPFlawType.THREAT
-        elif node.agenda:
-            return next(iter(node.agenda)), POPFlawType.OPENCOND
+        variables = q.variables()
+        instances = [q.arg(0).substitute(dict(zip(variables, objects)))
+                     for objects in itertools.product(*[self.problem.objects(v.type) for v in variables])]
+        if negated:
+            instances = [~i for i in instances]
+        return And(instances).simplify()
+
+    def _skolemize(self, q: FNode, bindings: Bindings, step_id: int) -> tuple[FNode, list[Var]]:
+        """Replace the variables of the outermost (existential) quantifier of
+        Q with fresh variables of step STEP_ID. If Q is negated, its body is
+        negated."""
+        negated = q.is_not()
+        if negated:
+            q = ~q
+
+        em = q.environment.expression_manager
+        variables = q.variables()
+        parameters = _fresh_parameters(variables, bindings)
+        body = q.arg(0).substitute({em.VariableExp(v): em.ParameterExp(p) for v, p in zip(variables, parameters)})
+        return (~body if negated else body), [Var(p.name, p.type, step_id) for p in parameters]
+
+    def _classify_goal(self, q: FNode):
+        if q.is_forall() or q.is_exists() or (q.is_not() and ((~q).is_forall() or (~q).is_exists())):
+            return UCPOPFlawType.UNIVERSAL_GOAL
         else:
-            return None, None
+            return super()._classify_goal(q)
 
-    def _get_daughter_nodes_for_threat(self, node: POPSearchNode, flaw):
-        """This corresponds to the causal link protection step in the POP
-        non-deterministic pseudocode"""
-        a_t, link = flaw
-        demotion_c = node.plan.can_demote(a_t, link)
-        promotion_c = node.plan.can_promote(a_t, link)
-        if demotion_c and promotion_c:
-            return [node.with_new_constraint(*demotion_c),
-                    node.with_new_constraint(*promotion_c)]
-        elif demotion_c:
-            return [node.with_new_constraint(*demotion_c)]
-        elif promotion_c:
-            return [node.with_new_constraint(*promotion_c)]
-        else:
-            # Couldn't promote or demote to resolve threat so no daughter plans
-            return []
-
-    def _get_daughter_nodes_for_opencond(self, node: POPSearchNode, flaw):
-        """This corresponds to the action selection step in the POP
-        non-deterministic pseudocode"""
+    def _get_daughter_nodes_for_universal_goal(self, node: POP3SearchNode, flaw):
         q, a_need = flaw
+        # not forall = exists not, and not exists = forall not
+        if q.is_exists() or (q.is_not() and (~q).is_forall()):
+            q_base, skolems = self._skolemize(q, node.plan.bindings, a_need.id)
+            return [node.with_skolem_constants(q, a_need, q_base, skolems)]
 
-        def action_could_work(action):
-            return q in [e.fluent for e in action.effects if e.value.is_true()]
+        q_base = self._compute_universal_base(q)
+        if q_base.is_false():
+            return []
+        new_agenda = node.agenda - {(q, a_need)}
+        if not q_base.is_true():
+            new_agenda = new_agenda | {(q_base, a_need)}
+        return [(node.with_new_agenda(new_agenda), { "note": f"replaced {q} with {q_base}" })]
 
-        def plan_with_new_step_from(action):
-            return node.with_new_step(action, q, a_need)
-
-        # possible plans when a_add is a newly instantiated step
-        new_step_plans = [plan_with_new_step_from(action) for action in self.problem.actions if action_could_work(action)]
-
-        def plan_with_reused_step_from(step):
-            return node.with_reused_step(step, q, a_need)
-
-        # possible plans when a_add is a reused step
-        reused_step_plans = [plan_with_reused_step_from(step) for step in node.plan.reusable_steps(q, a_need)]
-
-        # all possible plans derived from all possible choices of a_add
-        daughter_plans = new_step_plans + reused_step_plans
-        return daughter_plans
-
-
-    def _get_daughter_nodes_for_flaw(self, node: POPSearchNode, flaw_type: POPFlawType, flaw):
-        if flaw_type == POPFlawType.THREAT:
-            return self._get_daughter_nodes_for_threat(node, flaw)
-        elif flaw_type == POPFlawType.OPENCOND:
-            return self._get_daughter_nodes_for_opencond(node, flaw)
+    def _get_daughter_nodes_for_flaw(self, node: POP3SearchNode, flaw_type: Enum, flaw):
+        if flaw_type == UCPOPFlawType.UNIVERSAL_GOAL:
+            return self._get_daughter_nodes_for_universal_goal(node, flaw)
         else:
-            return None
-
-    def execute(self, search_limit=2000):
-        """Run the search in plan-space.
-        """
-
-        # step 1
-        def pop_goal_p(node):
-            return len(node.agenda) == 0 and len(node.threats) == 0
-
-        def pop_daughters_fn(node):
-            # step 2
-            flaw, flaw_type = self._get_flaw(node)
-            # step 3
-            daughter_nodes = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
-            return daughter_nodes
-
-        def pop_rank_fn(node):
-            return len(node.plan.steps) + len(node.agenda) + len(node.threats)
-
-        node = self._create_initial_node()
-        goal_node = best_first_search(node,
-                                      pop_daughters_fn,
-                                      pop_goal_p,
-                                      pop_rank_fn,
-                                      search_limit)
-
-        return goal_node.plan if goal_node else None
+            return super()._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
