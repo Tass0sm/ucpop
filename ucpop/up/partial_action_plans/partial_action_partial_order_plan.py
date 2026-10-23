@@ -95,7 +95,7 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
             action = action_adj_dict[0]
             adj_dict = action_adj_dict[1]
             adj_list = [(str(id[ai]), labels["condition"]) for ai, labels in adj_dict.items()]
-            adj_list_str = ", ".join(map(lambda x: x[0] + (" if " + str(x[1])) if x[1] else "", adj_list))
+            adj_list_str = ", ".join(map(lambda x: x[0] + (" if " + str(x[1]) if x[1] is not None else ""), adj_list))
             return f"    {id[action]} < {adj_list_str}"
 
         ret.extend(

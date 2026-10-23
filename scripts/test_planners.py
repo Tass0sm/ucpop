@@ -1,6 +1,6 @@
-"""Exercise POP3 and UCPOP on a few small problems and check each returned plan is
-valid under every grounding allowed by its binding constraints and every
-linearization of its partial order."""
+"""Exercise POP3, UCPOP and PCOP on a few small problems and check each returned
+plan is valid under every grounding allowed by its binding constraints and
+every linearization of its partial order in that grounding."""
 
 import itertools
 import logging
@@ -13,6 +13,7 @@ from unified_planning.plans import SequentialPlan, ActionInstance
 import ucpop
 from ucpop.pop3 import POP3
 from ucpop.ucpop import UCPOP
+from ucpop.pcop import PCOP
 from ucpop.variable import Var
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
@@ -279,15 +280,49 @@ def blocks_clear_free():
     return blocks('blocks_clear_free', clear_free=True)
 
 
+def battery(name='battery', n_robots=2, charged_initially=True):
+    """Using a robot drains its battery, and robot1 must end up charged.
+    Leaving the robot used unbound, the threat to (charged robot1) holds only
+    if it is robot1: PCOP can separate it from robot1, or order its use before
+    the charging under that codesignation. With one robot, separation leaves
+    no grounding. If not CHARGED_INITIALLY, robot1 must be charged by a step."""
+    Robot = UserType('Robot')
+    used = Fluent('used')
+    charged = Fluent('charged', BoolType(), r=Robot)
+
+    use = InstantaneousAction('use', r=Robot)
+    use.add_effect(used, True)
+    use.add_effect(charged(use.parameter('r')), False)
+
+    charge = InstantaneousAction('charge', r=Robot)
+    charge.add_effect(charged(charge.parameter('r')), True)
+
+    problem = Problem(name)
+    problem.add_fluent(used, default_initial_value=False)
+    problem.add_fluent(charged, default_initial_value=False)
+    problem.add_actions([use, charge])
+    robots = [Object(f'robot{i + 1}', Robot) for i in range(n_robots)]
+    problem.add_objects(robots)
+    if charged_initially:
+        problem.set_initial_value(charged(robots[0]), True)
+    problem.add_goal(used)
+    problem.add_goal(charged(robots[0]))
+    return problem
+
+
+def battery_one():
+    return battery('battery_one', n_robots=1)
+
+
+def battery_uncharged():
+    return battery('battery_uncharged', charged_initially=False)
+
+
 def groundings(plan, problem):
     """Every assignment of objects to the plan's unbound variables that
     respects its noncodesignation constraints."""
     bindings = plan.bindings
-    variables = sorted({bindings.find(Var(p.name, p.type, s.id))
-                        for s in plan.steps if s.action
-                        for p in s.action.parameters
-                        if bindings.get_grounding(Var(p.name, p.type, s.id)) is None},
-                       key=lambda v: (v.num, v.name))
+    variables = sorted(bindings.unbound, key=lambda v: (v.num, v.name))
 
     for values in itertools.product(*[problem.objects(v.type) for v in variables]):
         assignment = dict(zip(variables, values))
@@ -315,7 +350,13 @@ def check(problem, plan):
     checked, failures = 0, []
     with PlanValidator(problem_kind=problem.kind) as validator:
         for value in groundings(plan, problem):
-            for order in nx.all_topological_sorts(graph):
+            # PCOP's orderings that hold in this grounding
+            grounded = graph.copy()
+            for u, v, condition in getattr(plan, 'conditional_edges', ()):
+                if u in steps and v in steps and all((value(x) == value(y)) == eq for x, y, eq in condition):
+                    grounded.add_edge(u, v)
+
+            for order in nx.all_topological_sorts(grounded):
                 actions = [ActionInstance(steps[i].action,
                                           tuple(value(Var(p.name, p.type, i)) for p in steps[i].action.parameters))
                            for i in order]
@@ -327,9 +368,9 @@ def check(problem, plan):
 
 if __name__ == '__main__':
     pop3_problems = [sticky_robots, robot_moves, robot_either, lamp, briefcase, blocks]
-    ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free]
+    ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged]
 
-    for planner_name, planner_class, problems in [('pop3', POP3, pop3_problems), ('ucpop', UCPOP, ucpop_problems)]:
+    for planner_name, planner_class, problems in [('pop3', POP3, pop3_problems), ('ucpop', UCPOP, ucpop_problems), ('pcop', PCOP, ucpop_problems)]:
         for make_problem in problems:
             problem = make_problem()
             plan, path = planner_class(problem).execute()
@@ -343,5 +384,7 @@ if __name__ == '__main__':
 
             checked, failures = check(problem, plan)
             print(f"  search path length {len(path)}; {checked} grounded linearizations checked, {len(failures)} invalid")
+            if checked == 0:
+                print("  INVALID: no grounded linearization")
             for f in failures[:3]:
                 print("  INVALID:", f)

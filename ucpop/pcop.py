@@ -1,375 +1,132 @@
-"""Implementation of Partial Conditional Ordering Planning
-https://homes.cs.washington.edu/~weld/papers/pi.pdf
+"""Implementation of Partial Conditional Ordering Planning (PCOP)
 
+Extends UCPOP so that a plan is complete without binding all of its
+variables. A plan then stands for all of its groundings, i.e. assignments of
+objects to its unbound variables that respect its noncodesignations, and it
+must be correct in each of them.
+
+UCPOP only treats forced threats as flaws and relies on grounding every
+variable to turn the possible threats into forced ones. PCOP treats every
+possible threat as a flaw: a step whose effect clobbers a link under some
+codesignations C. It can be resolved by
+- conditional demotion or promotion: ordering the step before the producer
+  or after the consumer in the groundings where C holds;
+- separation: a noncodesignation ruling out one of C;
+- confrontation, as in UCPOP: requiring the antecedent of a conditional
+  effect to be false (in every grounding, which is stronger than needed);
+- redemption: reusing a step as a white knight, linking it to the consumer
+  for the threatened condition and ordering the threatening step before it
+  in the groundings where C holds.
+
+A plan is complete when it has no open conditions and no threats and its
+bindings have at least one grounding.
 """
 
-import random
 import logging
-import itertools
-from enum import Enum
-from typing import List, Dict, Tuple, Collection, FrozenSet, Any
-from functools import reduce
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from frozendict import frozendict
-from unified_planning.model import FNode, Problem, Action, Effect, Object
-from unified_planning.shortcuts import Exists, Forall
-
-from ucpop.search import best_first_search
-from ucpop.classes import PlanStep, Link, PartialConditionalActionPlan as Plan
-from ucpop.utils import initial_values_to_conjuncts
-from ucpop.variable import Var, DisjunctiveBindings as Bindings, Unifier, most_general_unification
+from ucpop.classes import PlanStep, PCOPPlan as Plan
+from ucpop.pop3 import POP3FlawType, _effect_condition, _effect_sort_key
+from ucpop.ucpop import UCPOP, UCPOPSearchNode
+from ucpop.variable import Bindings, Unifier, UniversalVar, most_general_unification
 
 logger = logging.getLogger(__name__)
 
 
-def _symbol_sort_key(s):
-    """Deterministic ordering for a unification Symbol (Var | FNode) that
-    doesn't rely on Python's (per-process-randomized) hash/set order."""
-    if isinstance(s, Var):
-        return (0, s.name, s.num)
-    else:  # FNode
-        return (1, s.node_id)
-
-
-def _unifier_sort_key(unifier):
-    """Deterministic ordering for a single unifier (list of (x, y, eq)
-    triples), used to canonicalize threat-accommodation clauses before
-    iterating them."""
-    return tuple(sorted((_symbol_sort_key(x), _symbol_sort_key(y), eq) for x, y, eq in unifier))
+def _show_condition(condition):
+    return " and ".join(f"{x} {'=' if eq else '!='} {y}" for x, y, eq in condition) or "always"
 
 
 @dataclass(eq=True, frozen=True)
-class PCOPSearchNode:
+class PCOPSearchNode(UCPOPSearchNode):
     plan: Plan
-    agenda: FrozenSet[FNode]
-    threats: FrozenSet[Tuple[PlanStep, Link]]
 
-    # Nota Bene, threats are considered part of the search node so that they are
-    # lazily resolved during search, as opposed to eagerly resolved during the
-    # generation of daughter plans from agenda items
+    def with_new_constraint(self, first_id: int, second_id: int, addressed_threat, condition=frozenset()):
+        new_plan = self.plan.with_new_constraint(first_id, second_id, condition)
+        return self._make(new_plan, self.agenda), { "note": f"adding {first_id}->{second_id} if {_show_condition(condition)} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
 
-    def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
-        new_plan, a_add, new_link, logical_preconds = self.plan.with_new_step(action, q, a_need, all_unifiers)
+    def with_confrontation(self, addressed_threat):
+        """As in UCPOP, but only the instance of a universally quantified
+        effect is fixed: the threat's other codesignations are not committed."""
+        a_t, link, effect = addressed_threat
+        unifier = most_general_unification(~link.condition, link.step_c.id, effect, a_t.id, self.plan.bindings)
+        instance = [(x, y, eq) for x, y, eq in unifier if isinstance(y, UniversalVar)]
+        plan, constraints, antecedent, pairs = self._instantiate(effect, a_t.id, instance)
 
-        # add logical preconditions to agenda
-        new_agenda = self.agenda - {(q, a_need)} | set([(pc, a_add) for pc in logical_preconds])
+        new_plan = replace(plan, bindings=plan.bindings.union(new_constraints=constraints))
+        new_plan = new_plan.with_disabled_effect(a_t, effect, pairs)
+        new_agenda = self.agenda | {(~antecedent, a_t)}
+        return self._make(new_plan, new_agenda), { "note": f"confronting with {~antecedent} at {a_t} because it threatens {link}" }
 
-        # test all links in new plan with all steps in new plan to identify any new threats due to the new binding
-        # O(N^3)
-        # TODO: See if this can still be computed incrementally in this case
-        added_threats = []
-        for link in new_plan.links:
-            for step in new_plan.steps.values():
-                if (threat_conditions := new_plan.threatens(step, link)) is not None:
-                    added_threats.append((step, link, threat_conditions))
+    def with_separation(self, x, y, addressed_threat):
+        new_plan = replace(self.plan, bindings=self.plan.bindings.union(new_constraints=[(x, y, False)]))
+        return self._make(new_plan, self.agenda), { "note": f"separating {x} != {y} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
 
-        new_threats = self.threats.union(added_threats)
-
-        logger.info(f"Making plan using new action {action.name} with id {a_add.id} and unifiers {all_unifiers}")
-        return PCOPSearchNode(new_plan, new_agenda, new_threats), { "note": f"adding {a_add} for {q} in {a_need}" }
-
-    def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, all_unifiers: list[Unifier]):
-        new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, all_unifiers)
-        new_agenda = self.agenda - {(q, a_need)}
-
-        # test all links in new plan with all steps in new plan to identify any new threats due to the new binding
-        # O(N^3)
-        # TODO: See if this can still be computed incrementally in this case
-        added_threats = []
-        for link in new_plan.links:
-            for step in new_plan.steps.values():
-                if (threat_conditions := new_plan.threatens(step, link)) is not None:
-                    added_threats.append((step, link, threat_conditions))
-
-        new_threats = self.threats.union(added_threats)
-
-        logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} under unifiers {all_unifiers}")
-        return PCOPSearchNode(new_plan, new_agenda, new_threats), { "note": f"reusing step {a_add} for {q} in {a_need}" }
-
-    def with_new_constraint(
-            self,
-            first_id: int,
-            second_id: int,
-            edge_conditions: frozenset[Unifier],
-            addressed_threat
-    ):
-        new_plan = self.plan.with_new_constraint(first_id, second_id, edge_conditions)
-        new_threats = self.threats - {addressed_threat}
-        return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {first_id}->{second_id} under {edge_conditions} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
-
-    def with_redemption(
-            self,
-            first_id: int,
-            second_id: int,
-            edge_conditions: frozenset[Unifier],
-            addressed_threat
-    ):
-        new_plan = self.plan.with_new_constraint(first_id, second_id, edge_conditions)
-        new_threats = self.threats - {addressed_threat}
-        return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {first_id}->{second_id} under {edge_conditions} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
-
-    def with_new_bindings(
-            self,
-            unifier: Unifier,
-            addressed_threat: any
-    ):
-        new_plan = self.plan.with_new_bindings(unifier)
-
-        # test all links in new plan with all steps in new plan to identify any threats
-        # O(N^3)
-        # TODO: See if this can still be computed incrementally in this case
-        new_threats = []
-        for link in new_plan.links:
-            for step in new_plan.steps.values():
-                if (threat_conditions := new_plan.threatens(step, link)) is not None:
-                    new_threats.append((step, link, threat_conditions))
-        new_threats = frozenset(new_threats)
-
-        return PCOPSearchNode(new_plan, self.agenda, new_threats), { "note": f"adding {unifier} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
-
-    def with_new_agenda(self, new_agenda):
-        return PCOPSearchNode(self.plan, new_agenda, self.threats)
-
-    def _tie_break_key(self):
-        """Least-commitment tie-break: prefer fewer variable bindings first,
-        then fall back to the size of self.plan. Mirrors pcop_rank_fn so that
-        heapq's fallback comparison (used only when ranks are exactly equal)
-        agrees with the primary ranking."""
-        return (self.plan.bindings.size,
-                len(self.plan.steps) + len(self.agenda) + len(self.threats))
-
-    def __le__(self, other):
-        return self._tie_break_key() <= other._tie_break_key()
-
-    def __lt__(self, other):
-        return self._tie_break_key() < other._tie_break_key()
+    def with_redemption(self, a_r: PlanStep, effect, unifier: Unifier, addressed_threat, condition):
+        a_t, link, _ = addressed_threat
+        node, _ = self.with_reused_step(a_r, link.condition, link.step_c, effect, unifier)
+        if not node.plan.can_constrain(a_t.id, a_r.id):
+            return None
+        node, _ = node.with_new_constraint(a_t.id, a_r.id, addressed_threat, condition)
+        return node, { "note": f"redeeming {link} with {a_r} after {a_t} if {_show_condition(condition)}" }
 
 
-class PCOPFlawType(Enum):
-    THREAT = 0
-    OPENCOND = 1
-    UNIVERSAL_GOAL = 2
-    CONJUNCTION_GOAL = 3
+class PCOP(UCPOP):
+    plan_class = Plan
+    node_class = PCOPSearchNode
 
-
-class PCOP:
-
-    def __init__(self, problem: Problem):
-        self.problem = problem
-
-    def _create_initial_node(self) -> PCOPSearchNode:
-        # Plan
-        start_step = PlanStep(id=0, effects=initial_values_to_conjuncts(self.problem.initial_values))
-        end_step = PlanStep(id=-1, preconditions=frozenset(self.problem.goals))
-
-        plan = Plan(steps=frozendict({0: start_step, -1: end_step}),
-                    adj_list=frozendict({0: frozenset({(-1, ())})}),
-                    bindings=Bindings.empty(),
-                    links=frozenset())
-
-        # Agenda
-        agenda = frozenset([(q, end_step) for q in end_step.preconditions])
-
-        # Threats
-        threats = frozenset([])
-
-        return PCOPSearchNode(plan, agenda, threats)
-
-    def _compute_universal_base(self, q: FNode) -> FNode:
-        # first, take out of outer not
-        if q.is_not() and (~q).is_exists():
-            variable = (~q).variables()[0]
-            clause = ~(~q).arg(0)
-            q = Forall(clause, variable)
-
-        if q.is_forall():
-            clauses = [clause.substitute({variable: obj}) for obj in self.problem.objects(variable.type)]
-            q = reduce(lambda x, y: x & y, clauses).simplify()
-
-        return q
-
-    def _get_flaw(self, node: PCOPSearchNode) -> Tuple[Any, PCOPFlawType]:
-        """This corresponds to the goal selection step in the POP
-        non-deterministic pseudocode.
-
-        Flaw selection must be a deterministic function of plan content, not
-        of Python's (per-process-randomized) frozenset iteration order --
-        hence `min(..., key=...)` over stable, hash-independent keys instead
-        of `next(iter(...))`.
-        """
-        if node.threats:
-            a_t, link, threat_conditions = min(
-                node.threats,
-                key=lambda t: (t[0].id, t[1].step_p.id, t[1].condition.node_id, t[1].step_c.id),
-            )
-            return (a_t, link, threat_conditions), PCOPFlawType.THREAT
-        elif node.agenda:
-            q, a_c = min(node.agenda, key=lambda t: (t[1].id, t[0].node_id))
-
-            if (~q).is_exists() or q.is_exists() or (~q).is_forall() or q.is_forall():
-                return (q, a_c), PCOPFlawType.UNIVERSAL_GOAL
-            elif q.is_and():
-                return (q, a_c), PCOPFlawType.CONJUNCTION_GOAL
-            else:
-                return (q, a_c), PCOPFlawType.OPENCOND
-        else:
+    def _get_flaw(self, node: PCOPSearchNode):
+        """As in UCPOP, but unbound variables are not flaws."""
+        flaw, flaw_type = super()._get_flaw(node)
+        if flaw_type == POP3FlawType.UNBOUND_VAR:
             return None, None
+        return flaw, flaw_type
+
+    def _is_complete(self, node: PCOPSearchNode) -> bool:
+        return len(node.agenda) == 0 and len(node.threats) == 0 and self._has_grounding(node.plan.bindings)
+
+    def _has_grounding(self, bindings: Bindings) -> bool:
+        """Whether some assignment of objects to the unbound variables
+        respects the bindings, by backtracking over the objects of each
+        variable's type."""
+        unbound = sorted(bindings.unbound, key=lambda v: (v.num, v.name))
+
+        def search(bindings, i):
+            if i == len(unbound):
+                return True
+            return any(b is not None and search(b, i + 1)
+                       for b in (bindings.assume([(unbound[i], o, True)]) for o in self.problem.objects(unbound[i].type)))
+
+        return search(bindings, 0)
 
     def _get_daughter_nodes_for_threat(self, node: PCOPSearchNode, flaw):
-        """This corresponds to the causal link protection step in the POP
-        non-deterministic pseudocode"""
-        a_t, link, threat_conditions = flaw
+        a_t, link, effect = flaw
+        plan = node.plan
+        condition = plan.threat_condition(a_t, link, effect)
 
         new_nodes = []
 
-        if demotion_c := node.plan.can_demote(a_t, link):
-            logger.info("Making plan with demotion")
-            new_nodes.append(node.with_new_constraint(*demotion_c, threat_conditions, flaw))
+        # conditional demotion and promotion
+        if plan.can_constrain(a_t.id, link.step_p.id):
+            new_nodes.append(node.with_new_constraint(a_t.id, link.step_p.id, flaw, condition))
+        if plan.can_constrain(link.step_c.id, a_t.id):
+            new_nodes.append(node.with_new_constraint(link.step_c.id, a_t.id, flaw, condition))
 
-        if promotion_c := node.plan.can_promote(a_t, link):
-            logger.info("Making plan with promotion")
-            new_nodes.append(node.with_new_constraint(*promotion_c, threat_conditions, flaw))
+        if _effect_condition(effect) is not None:
+            new_nodes.append(node.with_confrontation(flaw))
 
-        # apart from demotion and promotion, we want to also consider potential
-        # "redeemer" actions that are already ordered with respect to a_t, and
-        # then promote or demote those in order to resolve the threat. For now
-        # this is done when demotion and promotion are impossible. That is, when
-        # a_t is guaranteed to be between a_p and a_c. I think this should stay,
-        # but I could be wrong. An alternative would require a change to the
-        # whole notion of links. This may require further thought in a follow-up
-        # paper. Right now its not the goal.
+        # separation
+        for x, y, _ in sorted(condition, key=str):
+            if plan.bindings.can_divorce(x, y)[0]:
+                new_nodes.append(node.with_separation(x, y, flaw))
 
-        if not demotion_c and not promotion_c:
-            for a_r in sorted(node.plan.dfs_steps(a_t) - {a_t.id}, key=lambda s: s.id):
-                if node.plan.redeems(a_r, link) and (new_edge := node.plan.can_constrain(a_r.id, link.step_c.id)):
-                    # in effect, this is now replacing conditionally replacing
-                    # the threatened causal link. Not sure if this is the best
-                    # form of this algorithm but it at least works in some
-                    # scenarios. Will try to prove correctness.
-                    new_nodes.append(node.with_redemption(*new_edge, threat_conditions, flaw))
-
-        # threat conditions is a disjunction of conjunctions. if any clause is
-        # true, A_T will threaten LINK. So one only needs to ensure that one
-        # requirement from each clause is unsatisfied. If there are N clauses
-        # each with M items and you choose to only make disunification per
-        # clause, there are M^N possible descendant nodes for an accomodation.
-
-        # canonicalize clause and within-clause order so the product below is
-        # a deterministic function of threat_conditions' content, not of
-        # frozenset iteration order
-        sorted_clauses = [tuple(sorted(clause, key=lambda u: (_symbol_sort_key(u[0]), _symbol_sort_key(u[1]), u[2])))
-                          for clause in threat_conditions]
-        sorted_clauses.sort(key=_unifier_sort_key)
-
-        for requirements in itertools.product(*sorted_clauses):
-            if unifier := node.plan.can_accommodate(a_t, link, requirements):
-                new_nodes.append(node.with_new_bindings(unifier, flaw))
+        # redemption by a step that can come after A_T and before the consumer
+        for a_r in sorted(plan.steps, key=lambda s: s.id):
+            if a_r.id in (a_t.id, link.step_p.id, link.step_c.id) or not plan.possibly_before(a_r, link.step_c):
+                continue
+            for e in sorted(a_r.effects, key=_effect_sort_key):
+                unifier = most_general_unification(link.condition, link.step_c.id, e, a_r.id, plan.bindings)
+                if unifier is not None and (child := node.with_redemption(a_r, e, unifier, flaw, condition)):
+                    new_nodes.append(child)
 
         return new_nodes
-
-    def _get_daughter_nodes_for_opencond(self, node: PCOPSearchNode, flaw):
-        """This corresponds to the action selection step in the POP
-        non-deterministic pseudocode"""
-        q, a_need = flaw
-        q_step_id = a_need.id
-
-        def action_could_work(action):
-            # iterate over effects to find one that unifies with goal
-            unifications = filter(lambda x: x is not None,
-                                  map(lambda e: most_general_unification(q, q_step_id, e,
-                                                                         node.plan.highest_id + 1,
-                                                                         node.plan.bindings),
-                                      action.effects))
-
-            # return that unification if found
-            return list(unifications)
-
-        def plan_with_new_step_from(action, all_unifiers):
-            return node.with_new_step(action, q, a_need, all_unifiers)
-
-        # possible plans when a_add is a newly instantiated step
-        new_step_plans = [plan_with_new_step_from(action, all_unifiers) for action in self.problem.actions if len(all_unifiers := action_could_work(action)) > 0]
-
-        def plan_with_reused_step_from(step, all_unifiers):
-            return node.with_reused_step(step, q, a_need, all_unifiers)
-
-        logger.info(f"Getting reusable steps for ({q}, {q_step_id}) under {node.plan.bindings}")
-
-        # possible plans when a_add is a reused step
-        reused_step_plans = [plan_with_reused_step_from(step, all_unifiers) for step, all_unifiers in node.plan.reusable_steps(q, a_need)]
-
-        # all possible plans derived from all possible choices of a_add
-        daughter_plans = new_step_plans + reused_step_plans
-        return daughter_plans
-
-    def _get_daughter_nodes_for_universal_goal(self, node: PCOPSearchNode, flaw):
-        """This function is a workaround for the complicated step 2 in UCPOP,
-        which resolves a universal goal from the agenda."""
-        q, a_need = flaw
-        q_base = self._compute_universal_base(q)
-        new_agenda = node.agenda - {(q, a_need)} | {(q_base, a_need)}
-        return [(node.with_new_agenda(new_agenda), { "note": f"replaced {q} with {q_base}" })]
-
-    def _get_daughter_nodes_for_conjunction_goal(self, node: PCOPSearchNode, flaw):
-        """This function is a workaround for the complicated step 2 in UCPOP,
-        which resolves a conjunction goal from the agenda."""
-        q, a_need = flaw
-        new_agenda = node.agenda - {(q, a_need)} | set([(arg, a_need) for arg in q.args])
-        return [(node.with_new_agenda(new_agenda), { "note": f"expanded {q}" })]
-
-    def _get_daughter_nodes_for_flaw(self, node: PCOPSearchNode, flaw_type: PCOPFlawType, flaw):
-        if flaw_type == PCOPFlawType.THREAT:
-            return self._get_daughter_nodes_for_threat(node, flaw)
-        elif flaw_type == PCOPFlawType.OPENCOND:
-            return self._get_daughter_nodes_for_opencond(node, flaw)
-        elif flaw_type == PCOPFlawType.UNIVERSAL_GOAL:
-            return self._get_daughter_nodes_for_universal_goal(node, flaw)
-        elif flaw_type == PCOPFlawType.CONJUNCTION_GOAL:
-            return self._get_daughter_nodes_for_conjunction_goal(node, flaw)
-        else:
-            return []
-
-    def execute(self, search_limit=40000):
-        """Run the search in plan-space.
-        """
-
-        # step 1
-        def pcop_goal_p(node):
-            return len(node.agenda) == 0 and len(node.threats) == 0
-
-        def pcop_daughters_fn(node):
-            # step 2
-            flaw, flaw_type = self._get_flaw(node)
-            logger.info(f"Addressing {flaw_type} {flaw}")
-            # step 3
-            daughter_nodes_and_extras = self._get_daughter_nodes_for_flaw(node, flaw_type, flaw)
-            # logger.info(f"Threats: {current.threats}")
-            logger.info(f"Num Daughters = {len(daughter_nodes_and_extras)}")
-
-            return daughter_nodes_and_extras, { "flaw_type": flaw_type }
-
-        def pcop_rank_fn(node):
-            # Least-commitment: rank primarily by number of variable bindings
-            # committed so far (fewer is better -- e.g. prefer resolving a
-            # threat via promotion/demotion, which add no bindings, over
-            # accommodation, which does), and only fall back to plan/agenda/
-            # threat size to break ties among equally-committed plans.
-            return (node.plan.bindings.size,
-                    len(node.plan.steps) + len(node.agenda) + len(node.threats))
-
-        node = self._create_initial_node()
-        goal_node, search_tree = best_first_search(node,
-                                                   pcop_daughters_fn,
-                                                   pcop_goal_p,
-                                                   pcop_rank_fn,
-                                                   search_limit)
-
-        head = goal_node
-        search_path = [goal_node]
-        while head in search_tree:
-            head, extras = search_tree[head]
-            search_path.append((head, extras))
-        search_path = list(reversed(search_path))
-
-        return (goal_node.plan, search_path) if goal_node else (None, None)

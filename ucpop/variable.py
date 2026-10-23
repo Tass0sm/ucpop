@@ -68,6 +68,24 @@ class Bindings:
     def can_divorce(self, x: Symbol, y: Symbol) -> Optional[Unifier]:
         return self._can_divorce(self.nodes, x, y)
 
+    def assume(self, constraints: Unifier) -> Optional["Bindings"]:
+        """These bindings with CONSTRAINTS added, or None if they are
+        inconsistent with them."""
+        bindings = self
+        for x, y, eq in constraints:
+            consistent, unifier = bindings.can_unify(x, y) if eq else bindings.can_divorce(x, y)
+            if not consistent:
+                return None
+            bindings = bindings.union(new_constraints=unifier)
+        return bindings
+
+    def entails(self, constraints: Unifier) -> bool:
+        """Whether every one of CONSTRAINTS holds under every grounding of
+        these bindings. Sound but, as with can_unify, blind to the finiteness
+        of the domains."""
+        return all(self.find(x) == self.find(y) if eq else not self.can_unify(x, y)[0]
+                   for x, y, eq in constraints)
+
     def union(self, new_variables: list[Var] = [], new_constraints: Unifier = []) -> "Bindings":
         mutable_nodes = dict(self.nodes)
 

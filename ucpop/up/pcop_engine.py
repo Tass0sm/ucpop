@@ -1,135 +1,85 @@
-"""Engine for POP2 in unified-planning
+"""Engine for PCOP in unified-planning
 """
 
-import random
-from collections import defaultdict
-from typing import Callable, IO, Optional
 from functools import reduce
+from typing import Callable, IO, Optional
 
 import unified_planning as up
-from unified_planning import engines
 from unified_planning.engines import PlanGenerationResultStatus
-from unified_planning.model import Parameter, Variable
+from unified_planning.model import Variable
 
 from ucpop.up.partial_action_plans import PartialActionInstance, PartialActionPartialOrderPlan
+from ucpop.up.ucpop_engine import UCPOPEngineImpl
 from ucpop.variable import Var
 from ucpop.pcop import PCOP
 
 
-
-class PCOPEngineImpl(up.engines.Engine,
-                     up.engines.mixins.OneshotPlannerMixin):
-
-    def __init__(self, **options):
-        # Read known user-options and store them for using in the `solve` method
-        up.engines.Engine.__init__(self)
-        up.engines.mixins.OneshotPlannerMixin.__init__(self)
+class PCOPEngineImpl(UCPOPEngineImpl):
 
     @property
     def name(self) -> str:
         return "PCOP"
 
-    @staticmethod
-    def supported_kind():
-        # For this demo we limit ourselves to numeric planning.
-        # Other kinds of problems can be modeled in the UP library,
-        # see unified_planning.model.problem_kind.
-        supported_kind = up.model.ProblemKind()
-        supported_kind.set_problem_class("ACTION_BASED")
-        supported_kind.set_problem_type("GENERAL_NUMERIC_PLANNING")
-        supported_kind.set_time("DISCRETE_TIME")
-        supported_kind.set_typing('FLAT_TYPING')
-        supported_kind.set_fluents_type('OBJECT_FLUENTS')
-        supported_kind.set_conditions_kind("NEGATIVE_CONDITIONS")
-        supported_kind.set_conditions_kind("EQUALITIES")
-        return supported_kind
+    def _planner(self, problem):
+        return PCOP(problem)
 
     @staticmethod
-    def supports(problem_kind):
-        return problem_kind <= PCOPEngineImpl.supported_kind()
-
-    @staticmethod
-    def _action_adjacency_dicts_from_plan(plan):
+    def _action_adjacency_dicts_from_plan(plan, problem):
+        """The plan's steps as partial action instances whose unbound
+        parameters are variables, the orderings between them labeled with the
+        condition under which they hold (None if always), and for each
+        variable the objects it may be bound to and the variables it must
+        differ from."""
         id_to_instance_map = {}
         graph = {}
         relevant_variables = {}
 
-        def get_grounding_or_variable(v: Var):
-            nonlocal relevant_variables
+        def get_grounding_or_variable(v):
             result = plan.bindings.get_grounding_or_variable(v)
             if isinstance(result, Var):
-                up_var = Variable(result.name + str(result.num), result.type)
-                relevant_variables[result] = up_var
-                return up_var
-            else:
-                return result
+                if result not in relevant_variables:
+                    relevant_variables[result] = Variable(result.name + str(result.num), result.type)
+                return relevant_variables[result]
+            return result
 
-        for step in plan.steps.values():
+        for step in sorted(plan.steps, key=lambda s: s.id):
             if step.id in [0, -1]:
                 continue
-
-            def get_grounding_or_variable_from_parameter(p: Parameter):
-                v = Var(p.name, p.type, step.id)
-                return get_grounding_or_variable(v)
-
-            params = tuple(map(get_grounding_or_variable_from_parameter, step.action.parameters))
+            params = tuple(get_grounding_or_variable(Var(p.name, p.type, step.id)) for p in step.action.parameters)
             action_instance = PartialActionInstance(step.action, params)
             id_to_instance_map[step.id] = action_instance
             graph[action_instance] = {}
 
-        def convert_condition(c):
-            condition = []
-            for sub in c:
-                clause = []
-                for x_var, y_var, eq in sub:
-                    x = get_grounding_or_variable(x_var)
-                    y = get_grounding_or_variable(y_var)
-                    if eq:
-                        clause.append(x.Equals(y))
-                    else:
-                        clause.append(~x.Equals(y))
+        def convert_condition(condition):
+            literals = []
+            for x, y, eq in sorted(condition, key=str):
+                x, y = get_grounding_or_variable(x), get_grounding_or_variable(y)
+                literals.append(x.Equals(y) if eq else ~x.Equals(y))
+            return reduce(lambda a, b: a & b, literals)
 
-                if clause:
-                    clause = reduce(lambda a, b: a & b, clause)
-                    condition.append(clause)
-
-            if condition:
-                return reduce(lambda a, b: a | b, condition)
-            else:
-                return True
-
-        # Build the directed graph
+        # an edge holds if it is unconditional or any of its conditions holds
+        conditions = {}
         for u, vs in plan.adj_list.items():
-            for v, cond in vs:
-                if u in [0, -1] or v in [0, -1] or u == v:
-                    continue
-                u_inst = id_to_instance_map[u]
-                v_inst = id_to_instance_map[v]
+            for v in vs:
+                conditions[(u, v)] = None
+        for u, v, condition in plan.conditional_edges:
+            if conditions.get((u, v), False) is not None:
+                condition = convert_condition(condition)
+                conditions[(u, v)] = condition if (u, v) not in conditions else conditions[(u, v)] | condition
 
-                cond = convert_condition(cond)
-                graph[u_inst][v_inst] = {"condition": cond}
+        for (u, v), condition in conditions.items():
+            if u in [0, -1] or v in [0, -1] or u == v:
+                continue
+            graph[id_to_instance_map[u]][id_to_instance_map[v]] = {"condition": condition}
 
-        # For each relevant variable, get the constants that can be bound to
-        # them
+        relevant_variable_bindings = {}
+        for var, up_var in list(relevant_variables.items()):
+            possible = [o for o in problem.objects(var.type) if plan.bindings.can_unify(var, o)[0]]
+            different = [get_grounding_or_variable(other) for other in plan.bindings.nodes[var].noncodesignation
+                         if isinstance(other, Var)]
+            relevant_variable_bindings[up_var] = (possible, different)
 
-        relevant_variables_bindings = {}
-        for var, up_var in relevant_variables.items():
-            if var in plan.bindings.pending_disjunctions:
-                relevant_variables_bindings[up_var] = (
-                    list(plan.bindings.pending_disjunctions[var]),
-                    list(plan.bindings.nodes[var].noncodesignation)
-                )
-
-        return graph, relevant_variables_bindings
-
-    @staticmethod
-    def _print_plan(
-            i: int,
-            node_i
-    ):
-        action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(node_i.plan)
-        result = PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings)
-        print(result)
+        return graph, relevant_variable_bindings
 
     def _solve(
             self,
@@ -139,11 +89,11 @@ class PCOPEngineImpl(up.engines.Engine,
             output_stream: Optional[IO[str]] = None
     ) -> 'up.engines.PlanGenerationResult':
 
-        plan, search_path = PCOP(problem).execute()
+        plan, _ = self._planner(problem).execute()
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
-            action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(plan)
+            action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(plan, problem)
             return up.engines.PlanGenerationResult(
                 status, PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings),
                 self.name, metrics={}
@@ -151,9 +101,6 @@ class PCOPEngineImpl(up.engines.Engine,
         else:
             status = PlanGenerationResultStatus.UNSOLVABLE_PROVEN
             return up.engines.PlanGenerationResult(status, None, self.name)
-
-    def destroy(self):
-        pass
 
 
 env = up.environment.get_environment()

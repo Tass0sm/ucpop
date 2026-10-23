@@ -307,13 +307,16 @@ class POP3(POP2):
         else:
             return []
 
+    def _is_complete(self, node: POP3SearchNode) -> bool:
+        return len(node.agenda) == 0 and len(node.threats) == 0 and len(node.plan.bindings.unbound) == 0
+
     def execute(self, search_limit=40000):
         """Run the search in plan-space.
         """
 
         # step 1
         def pop3_goal_p(node):
-            return len(node.agenda) == 0 and len(node.threats) == 0 and len(node.plan.bindings.unbound) == 0
+            return self._is_complete(node)
 
         def pop3_daughters_fn(node):
             # step 2

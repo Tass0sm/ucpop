@@ -127,19 +127,21 @@ class UCPOPFlawType(Enum):
 
 
 class UCPOP(POP3):
+    plan_class = Plan
+    node_class = UCPOPSearchNode
 
     def _create_initial_node(self) -> UCPOPSearchNode:
         start_step = PlanStep(id=0, effects=initial_values_to_conjuncts(self.problem.initial_values))
         end_step = PlanStep(id=-1, preconditions=frozenset(self.problem.goals))
 
-        plan = Plan(steps=frozenset([start_step, end_step]),
-                    adj_list=frozendict({0: frozenset({-1})}),
-                    bindings=Bindings.empty(),
-                    links=frozenset())
+        plan = self.plan_class(steps=frozenset([start_step, end_step]),
+                               adj_list=frozendict({0: frozenset({-1})}),
+                               bindings=Bindings.empty(),
+                               links=frozenset())
 
         agenda = frozenset([(q, end_step) for q in end_step.preconditions])
 
-        return UCPOPSearchNode(plan, agenda, frozenset())
+        return self.node_class(plan, agenda, frozenset())
 
     def _compute_universal_base(self, q: FNode) -> FNode:
         """Replace the outermost (universal) quantifier of Q with the
