@@ -369,6 +369,7 @@ class POP3Plan(PartialActionPlan):
     unified_planning Effects so their `when` condition is still available."""
     bindings: Bindings
     disabled: FrozenSet[Tuple[int, Any]] = frozenset()   # (step id, effect) pairs whose antecedent was confronted
+    used: FrozenSet[Tuple[int, Any]] = frozenset()       # (step id, effect) pairs that established a link
 
     @staticmethod
     def _step_effects(action: Action):
@@ -392,6 +393,14 @@ class POP3Plan(PartialActionPlan):
 
     def with_disabled_effect(self, step: PlanStep, effect):
         return replace(self, disabled=self.disabled | {(step.id, effect)})
+
+    def uses(self, step: PlanStep, effect):
+        """Whether EFFECT of STEP already establishes a link, in which case
+        its antecedent is already a goal (step 4 of Figure 18)."""
+        return (step.id, effect) in self.used
+
+    def with_used_effect(self, step: PlanStep, effect):
+        return replace(self, used=self.used | {(step.id, effect)})
 
 
 @dataclass(eq=True, frozen=True, kw_only=True)

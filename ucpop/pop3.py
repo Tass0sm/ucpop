@@ -2,8 +2,8 @@
 section 6 of https://homes.cs.washington.edu/~weld/papers/pi.pdf
 
 Extends POP2 with:
-- conditional effects: linking from a conditional effect adds its antecedent
-  as an open condition, and a threat from a conditional effect can also be
+- conditional effects: the first link from a conditional effect adds its
+  antecedent as an open condition, and a threat from a conditional effect can also be
   resolved by confrontation, i.e. adding the negation of its antecedent as an
   open condition of the threatening step;
 - disjunctive goals and preconditions: a disjunction on the agenda is
@@ -98,16 +98,17 @@ class POP3SearchNode(POP2SearchNode):
     # the threats are recomputed by scanning all steps and links after every
     # change to the plan.
 
-    @staticmethod
-    def _make(plan: Plan, agenda):
+    @classmethod
+    def _make(cls, plan: Plan, agenda):
         threats = frozenset((step, link, effect)
                             for link in plan.links
                             for step in plan.steps
                             for effect in plan.threatening_effects(step, link))
-        return POP3SearchNode(plan, agenda, threats)
+        return cls(plan, agenda, threats)
 
     def with_new_step(self, action: Action, q: FNode, a_need: PlanStep, effect: Effect, unifier: Unifier):
         new_plan, a_add, new_link, logical_preconds = self.plan.with_new_step(action, q, a_need, unifier)
+        new_plan = new_plan.with_used_effect(a_add, effect)
 
         # add logical preconditions and the antecedent of the linked effect to
         # the agenda
@@ -122,9 +123,11 @@ class POP3SearchNode(POP2SearchNode):
     def with_reused_step(self, a_add: PlanStep, q: FNode, a_need: PlanStep, effect, unifier: Unifier):
         new_plan, new_link = self.plan.with_reused_step(a_add, q, a_need, unifier)
 
+        # the antecedent is already a goal if the effect supports another link
         new_agenda = self.agenda - {(q, a_need)}
-        if (condition := _effect_condition(effect)) is not None:
+        if (condition := _effect_condition(effect)) is not None and not self.plan.uses(a_add, effect):
             new_agenda = new_agenda | {(condition, a_add)}
+        new_plan = new_plan.with_used_effect(a_add, effect)
 
         logger.info(f"Making plan reusing step: {a_add.action.name if a_add.action else None} with id {a_add.id} and unifier {unifier}")
         return self._make(new_plan, new_agenda), { "note": f"reusing step {a_add} for {q} in {a_need}" }
@@ -133,8 +136,9 @@ class POP3SearchNode(POP2SearchNode):
         new_plan = self.plan.with_new_constraint(first_id, second_id)
         return self._make(new_plan, self.agenda), { "note": f"adding {first_id}->{second_id} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
 
-    def with_confrontation(self, goal: FNode, addressed_threat):
+    def with_confrontation(self, addressed_threat):
         a_t, link, effect = addressed_threat
+        goal = ~_effect_condition(effect)
         new_plan = self.plan.with_disabled_effect(a_t, effect)
         new_agenda = self.agenda | {(goal, a_t)}
         return self._make(new_plan, new_agenda), { "note": f"confronting with {goal} at {a_t} because it threatens {link}" }
@@ -144,7 +148,7 @@ class POP3SearchNode(POP2SearchNode):
         return self._make(new_plan, self.agenda - {(q, a_need)}), { "note": f"constraining bindings with {q} in {a_need}" }
 
     def with_new_agenda(self, new_agenda):
-        return POP3SearchNode(self.plan, new_agenda, self.threats)
+        return type(self)(self.plan, new_agenda, self.threats)
 
     def with_new_binding(self, var, obj):
         new_plan = self.plan.with_new_binding(var, obj)
@@ -224,8 +228,8 @@ class POP3(POP2):
 
         # confrontation: if the clobbering effect is conditional, require its
         # antecedent to be false when A_T executes
-        if (condition := _effect_condition(effect)) is not None:
-            new_nodes.append(node.with_confrontation(~condition, flaw))
+        if _effect_condition(effect) is not None:
+            new_nodes.append(node.with_confrontation(flaw))
 
         return new_nodes
 
@@ -234,6 +238,13 @@ class POP3(POP2):
         established the link so that its antecedent can be added as a goal."""
         q, a_need = flaw
         q_step_id = a_need.id
+
+        # step 2(d): the goal already has a link, e.g. when a goal for the
+        # same step appeared again. The paper fails here, but the goal may
+        # come from a different source (say, a precondition and a conjunct of
+        # a quantified one), so like the lisp UCPOP's HANDLE-GOAL, drop it
+        if any(link.condition == q and link.step_c.id == a_need.id for link in node.plan.links):
+            return [(node.with_new_agenda(node.agenda - {flaw}), { "note": f"{q} in {a_need} is already supported" })]
 
         def unifying_effects(effects, step_id):
             results = []
