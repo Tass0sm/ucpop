@@ -14,6 +14,21 @@ class Var:
     num: int
 
 
+def is_choice(x) -> bool:
+    """Whether X is a choice variable, which selects one of several
+    alternative ways a plan resolves a threat. Its type is an integer range
+    starting at 1, since a constant must be truthy."""
+    return isinstance(x, Var) and x.type.is_int_type()
+
+
+def domain(problem, var: Var) -> list:
+    """The values VAR may be bound to: the objects of its type, or the
+    integers of a choice variable's range."""
+    if is_choice(var):
+        return list(range(var.type.lower_bound, var.type.upper_bound + 1))
+    return list(problem.objects(var.type))
+
+
 @dataclass(eq=True, frozen=True)
 class UniversalVar(Var):
     """A universally quantified variable of an effect of step NUM. It is never

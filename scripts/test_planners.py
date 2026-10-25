@@ -14,7 +14,7 @@ import ucpop
 from ucpop.pop3 import POP3
 from ucpop.ucpop import UCPOP
 from ucpop.pcop import PCOP
-from ucpop.variable import Var
+from ucpop.variable import Var, domain
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
 
@@ -383,7 +383,7 @@ def groundings(plan, problem):
     bindings = plan.bindings
     variables = sorted(bindings.unbound, key=lambda v: (v.num, v.name))
 
-    for values in itertools.product(*[problem.objects(v.type) for v in variables]):
+    for values in itertools.product(*[domain(problem, v) for v in variables]):
         assignment = dict(zip(variables, values))
 
         def value(x):

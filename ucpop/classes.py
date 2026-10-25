@@ -14,6 +14,8 @@ from ucpop.utils import effects_to_conjuncts
 from ucpop.variable import (
     Var,
     Bindings,
+    domain,
+    is_choice,
     Unifier,
     most_general_unification,
     split_universal
@@ -483,19 +485,55 @@ class PCOPPlan(UCPOPPlan):
                 edges[u].append(v)
         return BasePlan(steps=self.steps, adj_list=add_edges(self.adj_list, edges), links=self.links, highest_id=self.highest_id)
 
-    # A conditional edge may hold, so ordering queries made while building
-    # the plan, e.g. whether a step can be reused or an edge added, treat it
-    # as holding. This never accepts an edge that would close a cycle in some
-    # grounding, at the cost of refusing some that would not.
+    # Ordering queries made while building the plan, e.g. whether a step can
+    # be reused or an edge added, ask whether a path in the other direction
+    # holds in some grounding: one whose edges' conditions can hold together.
+    # Edges guarded by different values of a choice variable never do.
+
+    def _reaches(self, v, u, condition=frozenset()) -> bool:
+        """Whether some path from step V to step U holds in a grounding where
+        CONDITION holds. Like Bindings.assume, it can miss that conditions
+        which are consistent pairwise cannot all hold, so it errs towards
+        finding a path."""
+        if (bindings := self.bindings.assume(condition)) is None:
+            return False
+        edges = defaultdict(list)
+        for x, ys in self.adj_list.items():
+            edges[x].extend((y, frozenset()) for y in ys)
+        for x, y, c in self.conditional_edges:
+            edges[x].append((y, c))
+
+        stack, visited = [(v, bindings)], set()
+        while stack:
+            current, b = stack.pop()
+            if current == u:
+                return True
+            if (current, b) in visited:
+                continue
+            visited.add((current, b))
+            for y, c in edges[current]:
+                if (b_y := b.assume(c) if c else b) is not None:
+                    stack.append((y, b_y))
+        return False
 
     def possibly_before(self, step: PlanStep, other: PlanStep):
-        return self._ordering(lambda c: True).possibly_before(step, other)
+        if step == other or step.id == -1 or other.id == 0:
+            return False
+        if step.id == 0 or other.id == -1:
+            return True
+        return not self._reaches(other.id, step.id)
 
     def possibly_after(self, step: PlanStep, other: PlanStep):
-        return self._ordering(lambda c: True).possibly_after(step, other)
+        return self.possibly_before(other, step)
 
-    def can_constrain(self, u, v):
-        return self._ordering(lambda c: True).can_constrain(u, v)
+    def can_constrain(self, u, v, condition=frozenset()):
+        """Whether ordering U before V where CONDITION holds closes no cycle
+        in any grounding."""
+        if u == 0 or v == -1:
+            return True
+        if u == -1 or v == 0 or u == v:
+            return False
+        return not self._reaches(v, u, condition)
 
     def critical_path(self) -> int:
         """The number of steps on the longest chain of orderings that hold in
@@ -524,15 +562,29 @@ class PCOPPlan(UCPOPPlan):
         link = ConditionalLink(step_p, q, step_c, frozenset(when))
         return replace(self, links=self.links | {link}).with_new_constraint(step_p.id, step_c.id, when)
 
+    def _choice_variables(self):
+        conditions = [c for _, _, c in self.conditional_edges] + [link_condition(link) for link in self.links]
+        return sorted({x for c in conditions for x, _, _ in c if is_choice(x)}, key=lambda v: (v.num, v.name))
+
+    def _is_resolved(self, step: PlanStep, link: Link, assumed: Bindings) -> bool:
+        """Whether, in every grounding of ASSUMED, STEP is ordered outside
+        LINK or before a white knight, i.e. the producer of another link for
+        the same condition and consumer that holds then too."""
+        ordering = self._ordering(assumed.entails)
+        if not ordering.possibly_between(step, link.step_p, link.step_c):
+            return True
+        return any(other.condition == link.condition and other.step_c == link.step_c and other.step_p not in (link.step_p, step)
+                   and assumed.entails(link_condition(other)) and not ordering.possibly_after(step, other.step_p)
+                   for other in self.links)
+
     def threat_condition(self, step: PlanStep, link: Link, effect):
         """The codesignations under which EFFECT of STEP clobbers LINK, or
         None if it never does: the effect does not unify with the negated link
         condition, its instance was confronted, the bindings rule the
         codesignations out together with those under which LINK holds, or
-        whenever they hold STEP is ordered outside LINK or before a white
-        knight, i.e. the producer of another link for the same condition and
-        consumer that holds then too. The result includes the codesignations
-        under which LINK holds."""
+        the threat is resolved whenever they hold. The result includes the
+        codesignations under which LINK holds and, for a choice variable
+        whose values resolve the threat for some of them, the others."""
         unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
         if unifier is None:
             return None
@@ -540,17 +592,24 @@ class PCOPPlan(UCPOPPlan):
         if self._is_disabled(step, effect, instance):
             return None
         condition = frozenset(ordinary) | link_condition(link)
-        if (assumed := self.bindings.assume(condition)) is None:
-            return None
 
-        ordering = self._ordering(assumed.entails)
-        if not ordering.possibly_between(step, link.step_p, link.step_c):
-            return None
-        if any(other.condition == link.condition and other.step_c == link.step_c and other.step_p not in (link.step_p, step)
-               and assumed.entails(link_condition(other)) and not ordering.possibly_after(step, other.step_p)
-               for other in self.links):
-            return None
-        return condition
+        choices = self._choice_variables()
+        while True:
+            if (assumed := self.bindings.assume(condition)) is None or self._is_resolved(step, link, assumed):
+                return None
+            for b in choices:
+                values = [x for x in domain(None, b) if assumed.assume([(b, x, True)]) is not None]
+                if len(values) < 2:
+                    continue
+                resolved = [x for x in values if self._is_resolved(step, link, assumed.assume([(b, x, True)]))]
+                if resolved:
+                    rest = [x for x in values if x not in resolved]
+                    if not rest:
+                        return None
+                    condition |= {(b, rest[0], True)} if len(rest) == 1 else {(b, x, False) for x in resolved}
+                    break
+            else:
+                return condition
 
     def threatening_effects(self, step: PlanStep, link: Link):
         return [effect for effect in step.effects if self.threat_condition(step, link, effect) is not None]

@@ -10,7 +10,7 @@ from unified_planning.model import Variable
 
 from ucpop.up.partial_action_plans import PartialActionInstance, PartialActionPartialOrderPlan
 from ucpop.up.ucpop_engine import UCPOPEngineImpl
-from ucpop.variable import Var
+from ucpop.variable import Var, domain
 from ucpop.pcop import PCOP
 
 
@@ -75,7 +75,7 @@ class PCOPEngineImpl(UCPOPEngineImpl):
 
         relevant_variable_bindings = {}
         for var, up_var in list(relevant_variables.items()):
-            possible = [o for o in problem.objects(var.type) if plan.bindings.assume([(var, o, True)]) is not None]
+            possible = [o for o in domain(problem, var) if plan.bindings.assume([(var, o, True)]) is not None]
             different = [get_grounding_or_variable(other) for other in plan.bindings.nodes[var].noncodesignation
                          if isinstance(other, Var)]
             relevant_variable_bindings[up_var] = (possible, different)
