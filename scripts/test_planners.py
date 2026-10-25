@@ -16,6 +16,7 @@ from ucpop.pop3 import POP3
 from ucpop.ucpop import UCPOP
 from ucpop.pcop import PCOP
 from ucpop.deferred import DeferredPOP, holds, show_plan
+from ucpop.orderings import compile_orderings, evaluate
 from ucpop.variable import Var
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
@@ -456,6 +457,27 @@ def check_deferred(problem, plan, formula):
     return satisfying, failures, excluded
 
 
+def check_orderings(problem, plan, formula, orderings):
+    """Compare the formula with its gated orderings on every grounding x
+    linearization of the plan's unconditional ordering; returns (#checked,
+    #where they disagree)."""
+    steps = [s.id for s in plan.steps if s.id not in (0, -1)]
+    graph = nx.DiGraph()
+    graph.add_nodes_from(steps)
+    graph.add_edges_from((u, v) for u, vs in plan.adj_list.items() for v in vs if u in steps and v in steps)
+
+    checked, disagreements = 0, 0
+    for value in groundings(plan, problem):
+        for order in nx.all_topological_sorts(graph):
+            position = {i: k for k, i in enumerate(order)} | {0: -1, -1: len(order)}
+            gated = all(value(v) in domain for v, domain in orderings.domains.items()) and any(all(position[u] < position[v] or not evaluate(guard, value, bits)
+                            for (u, v), guard in orderings.edges.items())
+                        for bits in itertools.product((0, 1), repeat=orderings.binaries))
+            checked += 1
+            disagreements += gated != holds(formula, value, position)
+    return checked, disagreements
+
+
 if __name__ == '__main__':
     pop3_problems = [sticky_robots, robot_moves, robot_either, lamp, briefcase, blocks]
     ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged, paint, pick_place]
@@ -501,3 +523,14 @@ if __name__ == '__main__':
             print("  INVALID: no grounded linearization satisfies the formula")
         for f in failures[:3]:
             print("  INVALID:", f)
+
+        try:
+            orderings = compile_orderings(plan, formula, problem)
+        except ValueError as e:
+            print(f"  gated orderings: not expressible, {e}")
+            continue
+        checked, disagreements = check_orderings(problem, plan, formula, orderings)
+        print(f"  gated orderings: {orderings.binaries} binaries, {len(orderings.edges)} edges; "
+              f"{checked} grounded linearizations checked, {disagreements} disagree with the formula")
+        if disagreements:
+            print("  INVALID: the gated orderings are not equivalent to the formula")

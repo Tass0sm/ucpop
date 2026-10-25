@@ -30,7 +30,7 @@ are supported.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from functools import lru_cache
 
@@ -91,6 +91,12 @@ class Support:
     establishers: tuple[Establisher, ...]
 
 
+# TODO: merge establishers from the same step whose clobberers are the
+# same into one, under the disjunction of their conditions. The initial
+# state gets one establisher per object (e.g. r = robot_k), each repeating
+# the same clobberers, so the formula grows about n^3 on n-robot
+# pick-and-place (50k clobberer terms at n = 30, where z3 takes 25s);
+# merging should cut it by about a factor of n.
 def compile_formula(plan: Plan) -> tuple[Support, ...]:
     """The formula, one Support for each precondition of each step that has
     a link. Establishers that cannot come before the step, and clobberers that
@@ -175,6 +181,24 @@ class _Encoding:
                       for e in sp.establishers])
 
 
+def ground(plan: Plan, problem: Problem, keep=lambda v: False) -> Plan:
+    """PLAN with each unbound variable, except those KEEP is true of, bound
+    to its value in a model of the plan's formula, so that the formula stays
+    satisfiable. Raises ValueError if it is not satisfiable."""
+    bindings = plan.bindings
+    encoding = _Encoding(plan, compile_formula(plan), problem)
+    grounded = sorted((v for v in bindings.unbound if not keep(v)), key=lambda v: (v.num, v.name))
+    terms = [encoding.value(v) for v in grounded]
+    if encoding.solver.check() != z3.sat:
+        raise ValueError("the plan's formula is not satisfiable")
+    model = encoding.solver.model()
+    objects = list(problem.all_objects)
+    constraints = [(v, objects[model.eval(t, model_completion=True).as_long()], True) for v, t in zip(grounded, terms)]
+    if (bindings := bindings.assume(constraints)) is None:
+        raise ValueError("a model of the plan's formula contradicts its bindings")
+    return replace(plan, bindings=bindings)
+
+
 def _show(x) -> str:
     return f"{x.name}{x.num}" if isinstance(x, Var) else str(x)
 
@@ -215,6 +239,14 @@ class DeferredSearchNode(DisjunctiveLinkNode, POP3SearchNode):
     def _make(cls, plan: Plan, agenda):
         return cls(plan, agenda, frozenset())
 
+    # TODO: rank open goals before commitments, i.e. (steps, open goals,
+    # commitments). Commitments accumulate along every branch (e.g. a
+    # Pick's start point is bound late), so an incomplete plan with an
+    # optional commitment can outrank the plan we want. With the current
+    # ranking, n-robot pick-and-place hits the search limit from n = 10;
+    # with open goals first, search is linear (4n nodes) and n = 20 takes
+    # 2.5s. That still finds the fewest steps first, but no longer the
+    # fewest commitments among them.
     def _tie_break_key(self):
         return (len(self.plan.steps), self.plan.bindings.commitments(), len(self.agenda))
 
