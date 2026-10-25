@@ -483,6 +483,21 @@ class PCOPPlan(UCPOPPlan):
     def can_constrain(self, u, v):
         return self._ordering(lambda c: True).can_constrain(u, v)
 
+    def critical_path(self) -> int:
+        """The number of steps on the longest chain of orderings that hold in
+        every grounding: the unconditional ones and the conditional ones whose
+        condition the bindings entail. It never shrinks as the plan is
+        refined, since steps, edges and bindings are only ever added."""
+        adj_list = self._ordering(self.bindings.entails).adj_list
+        lengths = {}
+
+        def length(u):
+            if u not in lengths:
+                lengths[u] = 1 + max((length(v) for v in adj_list.get(u, ()) if v != -1), default=0)
+            return lengths[u]
+
+        return max((length(s.id) for s in self.steps if s.id not in (0, -1)), default=0)
+
     def with_new_constraint(self, first_id: int, second_id: int, condition=frozenset()):
         if not condition:
             return super().with_new_constraint(first_id, second_id)

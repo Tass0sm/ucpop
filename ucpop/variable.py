@@ -116,6 +116,20 @@ class Bindings:
         return all(self.find(x) == self.find(y) if eq else not self.can_unify(x, y)[0]
                    for x, y, eq in constraints)
 
+    def commitments(self) -> int:
+        """How much these bindings commit to: one for each variable merged
+        into another variable or object, each variable bound to an object,
+        and each noncodesignation. Disjunctions are not counted, so linking
+        under one costs less than committing to any of its alternatives."""
+        # counted twice, since each noncodesignation is in both of its roots
+        n = 0
+        for x, node in self.nodes.items():
+            if self.find(x) != x:
+                n += 2 * isinstance(x, Var)
+            else:
+                n += 2 * (isinstance(x, Var) and node.constant is not None) + len(node.noncodesignation)
+        return n // 2
+
     def union(self, new_variables: list[Var] = [], new_constraints: Unifier = []) -> "Bindings":
         mutable_nodes = dict(self.nodes)
 

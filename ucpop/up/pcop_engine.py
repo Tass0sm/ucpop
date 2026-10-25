@@ -63,7 +63,8 @@ class PCOPEngineImpl(UCPOPEngineImpl):
             for v in vs:
                 conditions[(u, v)] = None
         for u, v, condition in plan.conditional_edges:
-            if conditions.get((u, v), False) is not None:
+            # skip edges whose condition the bindings rule out
+            if conditions.get((u, v), False) is not None and plan.bindings.assume(condition) is not None:
                 condition = convert_condition(condition)
                 conditions[(u, v)] = condition if (u, v) not in conditions else conditions[(u, v)] | condition
 

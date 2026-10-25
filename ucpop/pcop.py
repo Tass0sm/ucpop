@@ -87,6 +87,14 @@ class PCOPSearchNode(UCPOPSearchNode):
         node, _ = node.with_new_constraint(a_t.id, a_r.id, addressed_threat, condition)
         return node, { "note": f"redeeming {link} with {a_r} after {a_t} if {_show_condition(condition)}" }
 
+    def _tie_break_key(self):
+        """Prefer plans that commit to fewer bindings, then with a shorter
+        critical path, then with fewer steps. None of these decreases as a
+        plan is refined, so the first complete plan found minimizes them in
+        that order. The open goals and threats only break ties."""
+        plan = self.plan
+        return (plan.bindings.commitments(), plan.critical_path(), len(plan.steps), len(self.agenda) + len(self.threats))
+
 
 class PCOP(UCPOP):
     plan_class = Plan
