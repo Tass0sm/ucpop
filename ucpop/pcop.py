@@ -24,14 +24,6 @@ codesignations C. It can be resolved by
 The threats to a conditional link are those under its condition, and a
 conditional link is only a white knight where its condition holds.
 
-When several of the resolutions that only order steps under C apply, i.e.
-conditional demotion, promotion and redemption, PCOP does not branch on
-them but makes one child with a fresh choice variable b, applying the i-th
-under C and b = i. The executor then picks any of them by picking b, and
-orderings guarded by different values of b never form a cycle together. A
-threat that some values of b resolve remains only under the others, and
-separating b from a value drops that alternative.
-
 A goal that several unconditional effects of one producer unify with, say
 under U1 and U2, is supported by a single link from that producer with the
 disjunctive binding U1 or U2 rather than committing to either. Only
@@ -48,12 +40,11 @@ import logging
 from dataclasses import dataclass, replace
 
 from unified_planning.model import Effect
-from unified_planning.shortcuts import IntType
 
 from ucpop.classes import PlanStep, PCOPPlan as Plan, link_condition
 from ucpop.pop3 import POP3FlawType, _effect_condition, _effect_sort_key, _threat_sort_key
 from ucpop.ucpop import UCPOP, UCPOPSearchNode
-from ucpop.variable import Bindings, Unifier, UniversalVar, Var, domain, most_general_unification, split_universal
+from ucpop.variable import Bindings, Unifier, UniversalVar, most_general_unification, split_universal
 
 logger = logging.getLogger(__name__)
 
@@ -116,10 +107,8 @@ class PCOPSearchNode(UCPOPSearchNode):
             plan, constraints, antecedent, pairs = self._instantiate(effect, a_r.id, universal)
             plan = replace(plan, bindings=plan.bindings.union(new_constraints=constraints)).with_used_effect(a_r, effect, pairs)
 
-        if not plan.can_constrain(a_r.id, link.step_c.id, condition):
-            return None
         plan = plan.with_conditional_link(a_r, link.condition, link.step_c, condition)
-        if not plan.can_constrain(a_t.id, a_r.id, condition):
+        if not plan.can_constrain(a_t.id, a_r.id):
             return None
         plan = plan.with_new_constraint(a_t.id, a_r.id, condition)
         agenda = self.agenda | {(antecedent, a_r)} if antecedent is not None else self.agenda
@@ -163,7 +152,7 @@ class PCOP(UCPOP):
                 # has no alternative left
                 return (bindings := bindings.assume([])) is not None and not bindings.disjunctions
             return any(b is not None and search(b, i + 1)
-                       for b in (bindings.assume([(unbound[i], o, True)]) for o in domain(self.problem, unbound[i])))
+                       for b in (bindings.assume([(unbound[i], o, True)]) for o in self.problem.objects(unbound[i].type)))
 
         return search(bindings, 0)
 
@@ -174,12 +163,11 @@ class PCOP(UCPOP):
 
         new_nodes = []
 
-        # the resolutions that only order steps where a condition holds, as
-        # functions from a node and that condition to a child or None
-        def ordering(first, second):
-            return lambda n, c: n.with_new_constraint(first, second, flaw, c) if n.plan.can_constrain(first, second, c) else None
-        orderings = [ordering(a_t.id, link.step_p.id),          # conditional demotion
-                     ordering(link.step_c.id, a_t.id)]          # conditional promotion
+        # conditional demotion and promotion
+        if plan.can_constrain(a_t.id, link.step_p.id):
+            new_nodes.append(node.with_new_constraint(a_t.id, link.step_p.id, flaw, condition))
+        if plan.can_constrain(link.step_c.id, a_t.id):
+            new_nodes.append(node.with_new_constraint(link.step_c.id, a_t.id, flaw, condition))
 
         if _effect_condition(effect) is not None:
             new_nodes.append(node.with_confrontation(flaw))
@@ -191,7 +179,7 @@ class PCOP(UCPOP):
 
         # redemption by a step that can come after A_T and before the consumer
         for a_r in sorted(plan.steps, key=lambda s: s.id):
-            if a_r.id in (a_t.id, link.step_p.id, link.step_c.id) or not plan.can_constrain(a_r.id, link.step_c.id, condition):
+            if a_r.id in (a_t.id, link.step_p.id, link.step_c.id) or not plan.possibly_before(a_r, link.step_c):
                 continue
             for e in sorted(a_r.effects, key=_effect_sort_key):
                 unifier = most_general_unification(link.condition, link.step_c.id, e, a_r.id, plan.bindings)
@@ -199,31 +187,13 @@ class PCOP(UCPOP):
                     continue
                 ordinary, _ = split_universal(unifier)
                 if plan.bindings.assume(condition).entails(ordinary):
-                    orderings.append(lambda n, c, a_r=a_r, e=e, unifier=unifier: n.with_conditional_redemption(a_r, e, unifier, flaw, c))
-                elif child := node.with_redemption(a_r, e, unifier, flaw, condition):
+                    child = node.with_conditional_redemption(a_r, e, unifier, flaw, condition)
+                else:
+                    child = node.with_redemption(a_r, e, unifier, flaw, condition)
+                if child:
                     new_nodes.append(child)
 
-        return self._choice_children(node, orderings, condition) + new_nodes
-
-    def _choice_children(self, node: PCOPSearchNode, orderings, condition):
-        """The children resolving a threat under CONDITION by ORDERINGS. If
-        more than one applies, a single child applies all of them, the i-th
-        under CONDITION and a fresh choice variable being i, so it allows
-        every one of them rather than committing to one."""
-        applicable = [(f, child) for f in orderings if (child := f(node, condition))]
-        if len(applicable) < 2:
-            return [child for _, child in applicable]
-
-        bindings = node.plan.bindings
-        b = Var("choice", IntType(1, len(applicable)), len(bindings.nodes))
-        combined = type(node)(replace(node.plan, bindings=bindings.union(new_variables=[b])), node.agenda, node.threats)
-        notes = []
-        for i, (f, _) in enumerate(applicable, 1):
-            if (result := f(combined, condition | {(b, i, True)})) is None:
-                return [child for _, child in applicable]
-            combined, extras = result
-            notes.append(f"{i}: {extras['note']}")
-        return [(combined, { "note": f"choosing with {b.name}{b.num} between " + "; ".join(notes) })]
+        return new_nodes
 
     def _link_children(self, node: PCOPSearchNode, matches, link):
         """As in UCPOP, except that the unconditional effects of the producer

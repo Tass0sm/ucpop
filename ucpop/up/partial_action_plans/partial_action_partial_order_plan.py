@@ -82,15 +82,10 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
     def __str__(self) -> str:
         ret = ["PartialActionPartialOrderPlan:", "  actions:"]
 
-        # give an ID, starting from 0, to every ActionInstance in the Plan, in
-        # an order respecting the unconditional edges: conditional ones that
-        # never hold together, e.g. under different choices, may form cycles
-        unconditional = nx.DiGraph()
-        unconditional.add_nodes_from(self._graph.nodes)
-        unconditional.add_edges_from((u, v) for u, v, c in self._graph.edges(data="condition") if c is None)
+        # give an ID, starting from 0, to every ActionInstance in the Plan
         swap_couple = lambda x: (x[1], x[0])
         id: Dict[ActionInstance, int] = dict(
-            map(swap_couple, enumerate(nx.topological_sort(unconditional)))
+            map(swap_couple, enumerate(nx.topological_sort(self._graph)))
         )
         convert_action_id = lambda action_id: f"    {action_id[1]}) {action_id[0]}"
         ret.extend(map(convert_action_id, id.items()))
