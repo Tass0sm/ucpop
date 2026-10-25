@@ -19,6 +19,7 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
             relevant_variable_bindings: dict[any, list[any]],
             environment: Optional["Environment"] = None,
             _graph: Optional[nx.DiGraph] = None,
+            disjunctions: List[any] = (),
     ):
         """
         Constructs the PartialActionPartialOrderPlan using the labeled adjacency list representation.
@@ -31,6 +32,7 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
         """
 
         self._relevant_variable_bindings = relevant_variable_bindings
+        self._disjunctions = list(disjunctions)
 
         # if we have a specific environment or we don't have any actions
         if environment is not None or not adjacency_dicts:
@@ -115,6 +117,7 @@ class PartialActionPartialOrderPlan(plans.plan.Plan):
             return f"    {var}: {bindings_str}"
 
         ret.extend(map(print_bindings, self._relevant_variable_bindings.items()))
+        ret.extend(f"    {d}" for d in self._disjunctions)
 
         return "\n".join(ret)
 

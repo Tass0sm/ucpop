@@ -14,7 +14,6 @@ from ucpop.utils import effects_to_conjuncts
 from ucpop.variable import (
     Var,
     Bindings,
-    DisjunctiveBindings,
     Unifier,
     most_general_unification,
     split_universal
@@ -268,7 +267,7 @@ class BasePlan:
 
 @dataclass(eq=True, frozen=True, kw_only=True)
 class PartialActionPlan(BasePlan):
-    bindings: DisjunctiveBindings
+    bindings: Bindings
 
     @staticmethod
     def _separate_preconditions(preconditions, step_id):

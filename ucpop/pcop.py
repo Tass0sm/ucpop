@@ -18,12 +18,22 @@ codesignations C. It can be resolved by
   for the threatened condition and ordering the threatening step before it
   in the groundings where C holds.
 
+A goal that several unconditional effects of one producer unify with, say
+under U1 and U2, is supported by a single link from that producer with the
+disjunctive binding U1 or U2 rather than committing to either. Only
+unconditional effects take part, since the antecedent of a conditional one
+would have to be a goal only where its unifier holds. The threats to such a
+link are found as for any other, since they clobber the consumer's condition
+whichever effect supports it.
+
 A plan is complete when it has no open conditions and no threats and its
 bindings have at least one grounding.
 """
 
 import logging
 from dataclasses import dataclass, replace
+
+from unified_planning.model import Effect
 
 from ucpop.classes import PlanStep, PCOPPlan as Plan
 from ucpop.pop3 import POP3FlawType, _effect_condition, _effect_sort_key
@@ -59,8 +69,15 @@ class PCOPSearchNode(UCPOPSearchNode):
         return self._make(new_plan, new_agenda), { "note": f"confronting with {~antecedent} at {a_t} because it threatens {link}" }
 
     def with_separation(self, x, y, addressed_threat):
-        new_plan = replace(self.plan, bindings=self.plan.bindings.union(new_constraints=[(x, y, False)]))
+        if (bindings := self.plan.bindings.assume([(x, y, False)])) is None:
+            return None
+        new_plan = replace(self.plan, bindings=bindings)
         return self._make(new_plan, self.agenda), { "note": f"separating {x} != {y} because {addressed_threat[0]} threatens {addressed_threat[1]}" }
+
+    def with_disjunction(self, alternatives: list[Unifier]):
+        if (bindings := self.plan.bindings.with_disjunction(alternatives)) is None:
+            return None
+        return self._make(replace(self.plan, bindings=bindings), self.agenda)
 
     def with_redemption(self, a_r: PlanStep, effect, unifier: Unifier, addressed_threat, condition):
         a_t, link, _ = addressed_threat
@@ -93,7 +110,9 @@ class PCOP(UCPOP):
 
         def search(bindings, i):
             if i == len(unbound):
-                return True
+                # every variable is bound, so each disjunction is satisfied or
+                # has no alternative left
+                return (bindings := bindings.assume([])) is not None and not bindings.disjunctions
             return any(b is not None and search(b, i + 1)
                        for b in (bindings.assume([(unbound[i], o, True)]) for o in self.problem.objects(unbound[i].type)))
 
@@ -117,8 +136,8 @@ class PCOP(UCPOP):
 
         # separation
         for x, y, _ in sorted(condition, key=str):
-            if plan.bindings.can_divorce(x, y)[0]:
-                new_nodes.append(node.with_separation(x, y, flaw))
+            if plan.bindings.can_divorce(x, y)[0] and (child := node.with_separation(x, y, flaw)):
+                new_nodes.append(child)
 
         # redemption by a step that can come after A_T and before the consumer
         for a_r in sorted(plan.steps, key=lambda s: s.id):
@@ -130,3 +149,22 @@ class PCOP(UCPOP):
                     new_nodes.append(child)
 
         return new_nodes
+
+    def _link_children(self, node: PCOPSearchNode, matches, link):
+        """As in UCPOP, except that the unconditional effects of the producer
+        that need some codesignation to support the goal give a single child,
+        linking with the disjunction of their unifiers."""
+        def disjunctive(effect, unifier):
+            return unifier and _effect_condition(effect) is None and not (isinstance(effect, Effect) and effect.is_forall())
+
+        # an unconditional effect that needs no codesignation already
+        # supports the goal without committing to anything
+        alternatives = [(e, u) for e, u in matches if disjunctive(e, u)]
+        if len(alternatives) < 2 or any(not u and _effect_condition(e) is None for e, u in matches):
+            return super()._link_children(node, matches, link)
+
+        children = super()._link_children(node, [(e, u) for e, u in matches if not disjunctive(e, u)], link)
+        child, extras = link(alternatives[0][0], [])
+        if (child := child.with_disjunction([u for _, u in alternatives])):
+            children.append((child, { "note": extras["note"] + " under one of " + " or ".join(_show_condition(u) for _, u in alternatives) }))
+        return children

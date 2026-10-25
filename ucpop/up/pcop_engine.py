@@ -27,9 +27,9 @@ class PCOPEngineImpl(UCPOPEngineImpl):
     def _action_adjacency_dicts_from_plan(plan, problem):
         """The plan's steps as partial action instances whose unbound
         parameters are variables, the orderings between them labeled with the
-        condition under which they hold (None if always), and for each
-        variable the objects it may be bound to and the variables it must
-        differ from."""
+        condition under which they hold (None if always), for each variable
+        the objects it may be bound to and the variables it must differ from,
+        and the disjunctive bindings those do not already say."""
         id_to_instance_map = {}
         graph = {}
         relevant_variables = {}
@@ -74,12 +74,22 @@ class PCOPEngineImpl(UCPOPEngineImpl):
 
         relevant_variable_bindings = {}
         for var, up_var in list(relevant_variables.items()):
-            possible = [o for o in problem.objects(var.type) if plan.bindings.can_unify(var, o)[0]]
+            possible = [o for o in problem.objects(var.type) if plan.bindings.assume([(var, o, True)]) is not None]
             different = [get_grounding_or_variable(other) for other in plan.bindings.nodes[var].noncodesignation
                          if isinstance(other, Var)]
             relevant_variable_bindings[up_var] = (possible, different)
 
-        return graph, relevant_variable_bindings
+        # the disjunctions that the possible objects of each variable do not
+        # already say, i.e. those not just binding one variable to one of
+        # several objects
+        def domain_only(disjunction):
+            return len({x for a in disjunction for x, y, eq in a if isinstance(x, Var)}) == 1 and \
+                all(len(a) == 1 and not isinstance(y, Var) and eq for a in disjunction for x, y, eq in a)
+
+        disjunctions = [reduce(lambda a, b: a | b, [convert_condition(a) for a in sorted(d, key=str)])
+                        for d in sorted(plan.bindings.disjunctions, key=str) if not domain_only(d)]
+
+        return graph, relevant_variable_bindings, disjunctions
 
     def _solve(
             self,
@@ -93,9 +103,9 @@ class PCOPEngineImpl(UCPOPEngineImpl):
 
         if plan:
             status = PlanGenerationResultStatus.SOLVED_SATISFICING
-            action_adjacency_dicts, relevant_variable_bindings = PCOPEngineImpl._action_adjacency_dicts_from_plan(plan, problem)
+            action_adjacency_dicts, relevant_variable_bindings, disjunctions = PCOPEngineImpl._action_adjacency_dicts_from_plan(plan, problem)
             return up.engines.PlanGenerationResult(
-                status, PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings),
+                status, PartialActionPartialOrderPlan(action_adjacency_dicts, relevant_variable_bindings, disjunctions=disjunctions),
                 self.name, metrics={}
             )
         else:

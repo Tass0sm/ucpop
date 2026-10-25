@@ -255,19 +255,27 @@ class POP3(POP2):
             return results
 
         # possible plans when a_add is a newly instantiated step
-        new_step_plans = [node.with_new_step(action, q, a_need, effect, unifier)
+        new_step_plans = [child
                           for action in self.problem.actions
-                          for effect, unifier in unifying_effects(action.effects, node.plan.highest_id + 1)]
+                          for child in self._link_children(node, unifying_effects(action.effects, node.plan.highest_id + 1),
+                                                           lambda effect, unifier: node.with_new_step(action, q, a_need, effect, unifier))]
 
         logger.info(f"Getting reusable steps for ({q}, {q_step_id}) under {node.plan.bindings}")
 
         # possible plans when a_add is a reused step
-        reused_step_plans = [node.with_reused_step(step, q, a_need, effect, unifier)
+        reused_step_plans = [child
                              for step in sorted(node.plan.steps, key=lambda s: s.id)
                              if node.plan.possibly_before(step, a_need)
-                             for effect, unifier in unifying_effects(step.effects, step.id)]
+                             for child in self._link_children(node, unifying_effects(step.effects, step.id),
+                                                              lambda effect, unifier: node.with_reused_step(step, q, a_need, effect, unifier))]
 
         return new_step_plans + reused_step_plans
+
+    def _link_children(self, node: POP3SearchNode, matches, link):
+        """The children linking from one producer, given the (effect,
+        unifier) pairs MATCHES of its effects that unify with the goal and
+        LINK(effect, unifier), which makes the child linking from one."""
+        return [link(effect, unifier) for effect, unifier in matches]
 
     def _get_daughter_nodes_for_conjunction_goal(self, node: POP3SearchNode, flaw):
         q, a_need = flaw

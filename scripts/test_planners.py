@@ -318,9 +318,28 @@ def battery_uncharged():
     return battery('battery_uncharged', charged_initially=False)
 
 
+def paint():
+    """Painting a pair paints both, so one new step supports (painted t1)
+    under the disjunctive binding a = t1 or b = t1."""
+    Thing = UserType('Thing')
+    painted = Fluent('painted', BoolType(), t=Thing)
+
+    paint_pair = InstantaneousAction('paint_pair', a=Thing, b=Thing)
+    paint_pair.add_effect(painted(paint_pair.parameter('a')), True)
+    paint_pair.add_effect(painted(paint_pair.parameter('b')), True)
+
+    problem = Problem('paint')
+    problem.add_fluent(painted, default_initial_value=False)
+    problem.add_action(paint_pair)
+    things = [Object('t1', Thing), Object('t2', Thing)]
+    problem.add_objects(things)
+    problem.add_goal(painted(things[0]))
+    return problem
+
+
 def groundings(plan, problem):
     """Every assignment of objects to the plan's unbound variables that
-    respects its noncodesignation constraints."""
+    respects its noncodesignation constraints and disjunctive bindings."""
     bindings = plan.bindings
     variables = sorted(bindings.unbound, key=lambda v: (v.num, v.name))
 
@@ -333,7 +352,9 @@ def groundings(plan, problem):
 
         if all(value(v) != value(other)
                for v in variables
-               for other in bindings.nodes[v].noncodesignation):
+               for other in bindings.nodes[v].noncodesignation) and \
+           all(any(all((value(x) == value(y)) == eq for x, y, eq in alternative) for alternative in disjunction)
+               for disjunction in bindings.disjunctions):
             yield value
 
 
@@ -368,7 +389,7 @@ def check(problem, plan):
 
 if __name__ == '__main__':
     pop3_problems = [sticky_robots, robot_moves, robot_either, lamp, briefcase, blocks]
-    ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged]
+    ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged, paint]
 
     for planner_name, planner_class, problems in [('pop3', POP3, pop3_problems), ('ucpop', UCPOP, ucpop_problems), ('pcop', PCOP, ucpop_problems)]:
         for make_problem in problems:
