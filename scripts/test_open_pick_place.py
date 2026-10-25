@@ -7,9 +7,10 @@ affect the search.
 PCOP used to return a single chain over one robot variable
 (Pick w1 -> Place w1 -> Pick w0 -> Place w0, robot ?r in {robot0, robot1}),
 so one robot did all the work. Now that its search prefers fewer binding
-commitments and then shorter critical paths, it returns one robot variable
-per item, r3 != r4, and no ordering between the two Pick->Place chains, so
-both robots work in parallel.
+commitments and then shorter critical paths, and redeems threats with
+links that only hold under the threat's codesignations, it returns one
+free robot variable per item, with the two Pick->Place chains ordered only
+if both robots are the same, so different robots work in parallel.
 
 Run:
     uv run python scripts/test_open_pick_place.py

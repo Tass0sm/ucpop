@@ -16,7 +16,13 @@ codesignations C. It can be resolved by
   effect to be false (in every grounding, which is stronger than needed);
 - redemption: reusing a step as a white knight, linking it to the consumer
   for the threatened condition and ordering the threatening step before it
-  in the groundings where C holds.
+  in the groundings where C holds. When C entails the codesignations that
+  make the white knight's effect the condition, the link and its ordering
+  only hold where C does, so nothing is committed; otherwise those
+  codesignations are committed and the link always holds.
+
+The threats to a conditional link are those under its condition, and a
+conditional link is only a white knight where its condition holds.
 
 A goal that several unconditional effects of one producer unify with, say
 under U1 and U2, is supported by a single link from that producer with the
@@ -35,10 +41,10 @@ from dataclasses import dataclass, replace
 
 from unified_planning.model import Effect
 
-from ucpop.classes import PlanStep, PCOPPlan as Plan
-from ucpop.pop3 import POP3FlawType, _effect_condition, _effect_sort_key
+from ucpop.classes import PlanStep, PCOPPlan as Plan, link_condition
+from ucpop.pop3 import POP3FlawType, _effect_condition, _effect_sort_key, _threat_sort_key
 from ucpop.ucpop import UCPOP, UCPOPSearchNode
-from ucpop.variable import Bindings, Unifier, UniversalVar, most_general_unification
+from ucpop.variable import Bindings, Unifier, UniversalVar, most_general_unification, split_universal
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +93,27 @@ class PCOPSearchNode(UCPOPSearchNode):
         node, _ = node.with_new_constraint(a_t.id, a_r.id, addressed_threat, condition)
         return node, { "note": f"redeeming {link} with {a_r} after {a_t} if {_show_condition(condition)}" }
 
+    def with_conditional_redemption(self, a_r: PlanStep, effect, unifier: Unifier, addressed_threat, condition):
+        """As with_redemption, but the link from A_R and its orderings only
+        hold under CONDITION, which entails the ordinary part of UNIFIER, so
+        only the instance of a universally quantified effect is committed.
+        The antecedent of a conditional effect becomes a goal in every
+        grounding, which is stronger than needed."""
+        a_t, link, _ = addressed_threat
+        _, instance = split_universal(unifier)
+        plan, antecedent = self.plan, None
+        if not plan.uses(a_r, effect, instance):
+            universal = [(x, y, eq) for x, y, eq in unifier if isinstance(y, UniversalVar)]
+            plan, constraints, antecedent, pairs = self._instantiate(effect, a_r.id, universal)
+            plan = replace(plan, bindings=plan.bindings.union(new_constraints=constraints)).with_used_effect(a_r, effect, pairs)
+
+        plan = plan.with_conditional_link(a_r, link.condition, link.step_c, condition)
+        if not plan.can_constrain(a_t.id, a_r.id):
+            return None
+        plan = plan.with_new_constraint(a_t.id, a_r.id, condition)
+        agenda = self.agenda | {(antecedent, a_r)} if antecedent is not None else self.agenda
+        return self._make(plan, agenda), { "note": f"redeeming {link} with {a_r} after {a_t}, both if {_show_condition(condition)}" }
+
     def _tie_break_key(self):
         """Prefer plans that commit to fewer bindings, then with a shorter
         critical path, then with fewer steps. None of these decreases as a
@@ -101,7 +128,10 @@ class PCOP(UCPOP):
     node_class = PCOPSearchNode
 
     def _get_flaw(self, node: PCOPSearchNode):
-        """As in UCPOP, but unbound variables are not flaws."""
+        """As in UCPOP, but unbound variables are not flaws, and threats to
+        links that differ only in their condition are told apart."""
+        if node.threats:
+            return min(node.threats, key=lambda t: (_threat_sort_key(t), sorted(map(str, link_condition(t[1]))))), POP3FlawType.THREAT
         flaw, flaw_type = super()._get_flaw(node)
         if flaw_type == POP3FlawType.UNBOUND_VAR:
             return None, None
@@ -153,7 +183,14 @@ class PCOP(UCPOP):
                 continue
             for e in sorted(a_r.effects, key=_effect_sort_key):
                 unifier = most_general_unification(link.condition, link.step_c.id, e, a_r.id, plan.bindings)
-                if unifier is not None and (child := node.with_redemption(a_r, e, unifier, flaw, condition)):
+                if unifier is None:
+                    continue
+                ordinary, _ = split_universal(unifier)
+                if plan.bindings.assume(condition).entails(ordinary):
+                    child = node.with_conditional_redemption(a_r, e, unifier, flaw, condition)
+                else:
+                    child = node.with_redemption(a_r, e, unifier, flaw, condition)
+                if child:
                     new_nodes.append(child)
 
         return new_nodes

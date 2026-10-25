@@ -449,6 +449,19 @@ class UCPOPPlan(POP3Plan):
         return replace(self, used=self.used | {(step.id, effect, instance)})
 
 
+@dataclass(eq=True, frozen=True)
+class ConditionalLink(Link):
+    """A link that only holds in the groundings where every (x, y, eq) in
+    WHEN holds. PCOP only makes them for white knights, so the consumer's
+    condition also has an unconditional link."""
+    when: FrozenSet[Tuple[Any, Any, bool]] = frozenset()
+
+
+def link_condition(link: Link):
+    """The codesignations under which LINK holds, empty if always."""
+    return link.when if isinstance(link, ConditionalLink) else frozenset()
+
+
 @dataclass(eq=True, frozen=True, kw_only=True)
 class PCOPPlan(UCPOPPlan):
     """A UCPOP plan whose variables need not all be bound, so its threats
@@ -457,7 +470,8 @@ class PCOPPlan(UCPOPPlan):
     by orderings that only hold under those codesignations. adj_list keeps
     the unconditional edges and conditional_edges holds (u, v, condition)
     triples, ordering step u before step v in the groundings where every
-    (x, y, eq) in condition holds."""
+    (x, y, eq) in condition holds. Likewise, links may be ConditionalLinks,
+    which only hold where their condition does."""
     conditional_edges: FrozenSet[Tuple[int, int, FrozenSet[Tuple[Any, Any, bool]]]] = frozenset()
 
     def _ordering(self, keep) -> BasePlan:
@@ -503,30 +517,40 @@ class PCOPPlan(UCPOPPlan):
             return super().with_new_constraint(first_id, second_id)
         return replace(self, conditional_edges=self.conditional_edges | {(first_id, second_id, frozenset(condition))})
 
+    def with_conditional_link(self, step_p: PlanStep, q: FNode, step_c: PlanStep, when):
+        """A link from STEP_P to STEP_C for Q, ordered before it, both only in
+        the groundings where WHEN holds. The bindings are left unchanged, so
+        WHEN must entail the codesignations that make STEP_P's effect Q."""
+        link = ConditionalLink(step_p, q, step_c, frozenset(when))
+        return replace(self, links=self.links | {link}).with_new_constraint(step_p.id, step_c.id, when)
+
     def threat_condition(self, step: PlanStep, link: Link, effect):
         """The codesignations under which EFFECT of STEP clobbers LINK, or
         None if it never does: the effect does not unify with the negated link
         condition, its instance was confronted, the bindings rule the
-        codesignations out, or whenever they hold STEP is ordered outside
-        LINK or before a white knight, i.e. the producer of another link for
-        the same condition and consumer."""
+        codesignations out together with those under which LINK holds, or
+        whenever they hold STEP is ordered outside LINK or before a white
+        knight, i.e. the producer of another link for the same condition and
+        consumer that holds then too. The result includes the codesignations
+        under which LINK holds."""
         unifier = most_general_unification(~link.condition, link.step_c.id, effect, step.id, self.bindings)
         if unifier is None:
             return None
         ordinary, instance = split_universal(unifier)
         if self._is_disabled(step, effect, instance):
             return None
-        if (assumed := self.bindings.assume(ordinary)) is None:
+        condition = frozenset(ordinary) | link_condition(link)
+        if (assumed := self.bindings.assume(condition)) is None:
             return None
 
         ordering = self._ordering(assumed.entails)
         if not ordering.possibly_between(step, link.step_p, link.step_c):
             return None
         if any(other.condition == link.condition and other.step_c == link.step_c and other.step_p not in (link.step_p, step)
-               and not ordering.possibly_after(step, other.step_p)
+               and assumed.entails(link_condition(other)) and not ordering.possibly_after(step, other.step_p)
                for other in self.links):
             return None
-        return frozenset(ordinary)
+        return condition
 
     def threatening_effects(self, step: PlanStep, link: Link):
         return [effect for effect in step.effects if self.threat_condition(step, link, effect) is not None]

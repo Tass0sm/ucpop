@@ -337,6 +337,46 @@ def paint():
     return problem
 
 
+
+def pick_place():
+    """Two robots each with one hand carry two items to their goals, as in
+    scripts/test_open_pick_place.py. Each Pick clobbers the other's
+    (hand_empty r) if both robots are the same, so PCOP can leave both robots
+    unbound, redeeming one Pick's hand_empty with the other robot's Place only
+    under that codesignation."""
+    Point, Robot, Item = UserType('Point'), UserType('Robot'), UserType('Item')
+    item_at = Fluent('item_at', BoolType(), i=Item, p=Point)
+    holding = Fluent('holding', BoolType(), r=Robot, i=Item)
+    hand_empty = Fluent('hand_empty', BoolType(), r=Robot)
+
+    pick = InstantaneousAction('Pick', r=Robot, i=Item, p=Point)
+    r, i, p = pick.parameters
+    pick.add_precondition(item_at(i, p))
+    pick.add_precondition(hand_empty(r))
+    pick.add_effect(item_at(i, p), False)
+    pick.add_effect(holding(r, i), True)
+    pick.add_effect(hand_empty(r), False)
+
+    place = InstantaneousAction('Place', r=Robot, i=Item, p=Point)
+    r, i, p = place.parameters
+    place.add_precondition(holding(r, i))
+    place.add_effect(holding(r, i), False)
+    place.add_effect(hand_empty(r), True)
+    place.add_effect(item_at(i, p), True)
+
+    problem = Problem('pick_place')
+    problem.add_fluent(item_at, default_initial_value=False)
+    problem.add_fluent(holding, default_initial_value=False)
+    problem.add_fluent(hand_empty, default_initial_value=True)
+    problem.add_actions([pick, place])
+    problem.add_objects([Object(f'robot{k}', Robot) for k in range(2)])
+    for k in range(2):
+        item, start, goal = Object(f'water{k}', Item), Object(f'water{k}_start', Point), Object(f'water{k}_goal', Point)
+        problem.add_objects([item, start, goal])
+        problem.set_initial_value(item_at(item, start), True)
+        problem.add_goal(item_at(item, goal))
+    return problem
+
 def groundings(plan, problem):
     """Every assignment of objects to the plan's unbound variables that
     respects its noncodesignation constraints and disjunctive bindings."""
@@ -389,7 +429,7 @@ def check(problem, plan):
 
 if __name__ == '__main__':
     pop3_problems = [sticky_robots, robot_moves, robot_either, lamp, briefcase, blocks]
-    ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged, paint]
+    ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged, paint, pick_place]
 
     for planner_name, planner_class, problems in [('pop3', POP3, pop3_problems), ('ucpop', UCPOP, ucpop_problems), ('pcop', PCOP, ucpop_problems)]:
         for make_problem in problems:
