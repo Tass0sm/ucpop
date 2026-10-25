@@ -10,7 +10,8 @@ requires-python = ">=3.10"
 dependencies = [
     "unified-planning (>=1.2.0,<2.0.0)",
     "frozendict (>=2.4.6,<3.0.0)",
-    "networkx (>=3.0,<4.0)"
+    "networkx (>=3.0,<4.0)",
+    "z3-solver>=5.3.1.0",
 ]
 
 

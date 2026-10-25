@@ -1,6 +1,7 @@
 """Exercise POP3, UCPOP and PCOP on a few small problems and check each returned
 plan is valid under every grounding allowed by its binding constraints and
-every linearization of its partial order in that grounding."""
+every linearization of its partial order in that grounding. For the deferred
+planner, check that those satisfying its formula are exactly the valid ones."""
 
 import itertools
 import logging
@@ -14,6 +15,7 @@ import ucpop
 from ucpop.pop3 import POP3
 from ucpop.ucpop import UCPOP
 from ucpop.pcop import PCOP
+from ucpop.deferred import DeferredPOP, holds, show_plan
 from ucpop.variable import Var
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', level=logging.ERROR)
@@ -427,6 +429,33 @@ def check(problem, plan):
     return checked, failures
 
 
+def check_deferred(problem, plan, formula):
+    """Validate every grounding x linearization of the plan's unconditional
+    ordering; returns (#satisfying the formula, those of them invalid, #valid
+    ones not satisfying it)."""
+    steps = {s.id: s for s in plan.steps if s.id not in (0, -1)}
+    graph = nx.DiGraph()
+    graph.add_nodes_from(steps)
+    graph.add_edges_from((u, v) for u, vs in plan.adj_list.items() for v in vs if u in steps and v in steps)
+
+    satisfying, failures, excluded = 0, [], 0
+    with PlanValidator(problem_kind=problem.kind) as validator:
+        for value in groundings(plan, problem):
+            for order in nx.all_topological_sorts(graph):
+                position = {i: k for k, i in enumerate(order)} | {0: -1, -1: len(order)}
+                actions = [ActionInstance(steps[i].action,
+                                          tuple(value(Var(p.name, p.type, i)) for p in steps[i].action.parameters))
+                           for i in order]
+                valid = bool(validator.validate(problem, SequentialPlan(actions)))
+                if holds(formula, value, position):
+                    satisfying += 1
+                    if not valid:
+                        failures.append(actions)
+                elif valid:
+                    excluded += 1
+    return satisfying, failures, excluded
+
+
 if __name__ == '__main__':
     pop3_problems = [sticky_robots, robot_moves, robot_either, lamp, briefcase, blocks]
     ucpop_problems = pop3_problems + [briefcase_all, briefcase_some, briefcase_together, briefcase_forall, briefcase_forall_all, chmod, blocks_clear_free, battery, battery_one, battery_uncharged, paint, pick_place]
@@ -449,3 +478,26 @@ if __name__ == '__main__':
                 print("  INVALID: no grounded linearization")
             for f in failures[:3]:
                 print("  INVALID:", f)
+
+    for make_problem in ucpop_problems:
+        problem = make_problem()
+        label = f"deferred {problem.name}"
+        try:
+            planner = DeferredPOP(problem)
+        except ValueError as e:
+            print(f"{label}: skipped, {e}")
+            continue
+        plan, path = planner.execute()
+        if plan is None:
+            print(f"{label}: no plan found")
+            continue
+
+        formula = planner.formula(plan)
+        print(f"{label}:\n" + show_plan(plan, formula))
+        satisfying, failures, excluded = check_deferred(problem, plan, formula)
+        print(f"  search path length {len(path)}; {satisfying} grounded linearizations satisfy the formula, "
+              f"{len(failures)} invalid; {excluded} valid ones excluded")
+        if satisfying == 0:
+            print("  INVALID: no grounded linearization satisfies the formula")
+        for f in failures[:3]:
+            print("  INVALID:", f)
