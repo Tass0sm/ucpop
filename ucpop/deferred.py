@@ -219,9 +219,12 @@ def show_plan(plan: Plan, formula: tuple[Support, ...]) -> str:
         return " and ".join(f"{_show(bindings.get_grounding_or_variable(x))} {'=' if eq else '!='} {_show(bindings.get_grounding_or_variable(y))}"
                             for x, y, eq in sorted(condition, key=str))
 
+    steps = {s.id: s for s in plan.steps}
     lines.append("formula:")
     for sp in formula:
-        if any(not e.condition and not e.clobberers for e in sp.establishers):
+        # left out if an establisher always applies and must come first
+        if any(not e.condition and not e.clobberers and not plan.possibly_before(steps[sp.step], steps[e.step])
+               for e in sp.establishers):
             continue
         lines.append(f"  {sp.condition} at {sp.step} by one of")
         for e in sp.establishers:
